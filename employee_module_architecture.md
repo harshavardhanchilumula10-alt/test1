@@ -1,0 +1,357 @@
+# Employee Module Architecture
+
+## Overview
+
+The Employee module manages the complete employee lifecycle in the insurance management system:
+- **Registration** - HR creates new employees
+- **Self-Service** - Employees view/update their own profile
+- **Lifecycle** - Resignation, Notice Period, Exit
+
+---
+
+## Architecture Diagram
+
+```mermaid
+flowchart TD
+    subgraph UI["UI Layer (Templates)"]
+        HR_CREATE["hr/create-employee.html"]
+        HR_EMP_LIST["hr/employees.html"]
+        EMP_PROFILE["employee/profile.html"]
+        EMP_DASH["employee/dashboard.html"]
+    end
+
+    subgraph CTRL["Controller Layer"]
+        HR_CTRL["HrController"]
+        EMP_CTRL["EmployeeController"]
+    end
+
+    subgraph SVC["Service Layer"]
+        EMP_SVC["EmployeeService (interface)"]
+        EMP_IMPL["EmployeeServiceImpl"]
+    end
+
+    subgraph REPO["Repository Layer"]
+        EMP_REPO["EmployeeRepository"]
+        USER_REPO["UserRepository"]
+        ORG_REPO["OrganizationRepository"]
+    end
+
+    subgraph DTO["DTOs"]
+        CREATE_DTO["EmployeeCreateRequest"]
+        UPDATE_DTO["EmployeeUpdateRequest"]
+    end
+
+    subgraph MODEL["Entity Model"]
+        EMP["Employee"]
+        EMP_ADDR["EmployeeAddress"]
+        EMP_STATUS["EmployeeStatus"]
+        EMP_CAT["EmployeeCategory"]
+    end
+
+    subgraph DB["Database"]
+        EMP_TABLE["employee"]
+        USER_TABLE["user"]
+    end
+
+    %% HR Flow
+    HR_CREATE -->|"POST /hr/create-employee"| HR_CTRL
+    HR_EMP_LIST -->|"POST /hr/employees/{id}/resign"| HR_CTRL
+    HR_EMP_LIST -->|"POST /hr/employees/{id}/exit"| HR_CTRL
+    HR_CTRL --> EMP_SVC
+
+    %% Employee Self-Service Flow
+    EMP_PROFILE -->|"POST /employee/profile/update"| EMP_CTRL
+    EMP_DASH --> EMP_CTRL
+    EMP_CTRL --> EMP_SVC
+
+    %% Service to Repository
+    EMP_SVC --> EMP_IMPL
+    EMP_IMPL --> EMP_REPO
+    EMP_IMPL --> USER_REPO
+    EMP_IMPL --> ORG_REPO
+
+    %% Repository to DB
+    EMP_REPO --> EMP_TABLE
+    USER_REPO --> USER_TABLE
+
+    %% DTO Flow
+    CREATE_DTO --> HR_CTRL
+    UPDATE_DTO --> EMP_CTRL
+```
+
+---
+
+## Employee Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> ACTIVE: HR Creates Employee
+    ACTIVE --> NOTICE: HR Initiates Resignation
+    NOTICE --> EXITED: HR Completes Exit<br/>(after 30 days notice)
+    
+    ACTIVE --> ACTIVE: Self-Service Updates
+    NOTICE --> NOTICE: Can still submit claims
+    EXITED --> [*]: Cannot update profile<br/>Cannot enroll in new policies
+```
+
+---
+
+## Flow 1: Employee Registration (HR)
+
+```mermaid
+sequenceDiagram
+    participant HR as HR User
+    participant T as hr/create-employee.html
+    participant C as HrController
+    participant S as EmployeeServiceImpl
+    participant R as EmployeeRepository
+    participant U as UserRepository
+    participant DB as Database
+
+    HR->>T: Navigate to /hr/create-employee
+    T->>C: GET /hr/create-employee
+    C-->>T: Empty EmployeeCreateRequest form
+    
+    HR->>T: Fill form and submit
+    T->>C: POST /hr/create-employee<br/>(EmployeeCreateRequest)
+    
+    Note over C: Validate BindingResult
+    
+    C->>S: registerEmployee(dto, orgId)
+    
+    Note over S: Validations:<br/>1. Only HR can create<br/>2. Domain must match<br/>3. Email unique<br/>4. Phone unique<br/>5. Age 18-70<br/>6. Joining date valid
+    
+    alt Validation Fails
+        S-->>C: throws BusinessException
+        C-->>T: Model with error message
+    else Validation Passes
+        S->>U: save(new User)
+        U->>DB: INSERT user
+        S->>R: save(new Employee)
+        R->>DB: INSERT employee
+        S-->>C: Employee saved
+        C-->>T: redirect:/hr/employees + success
+    end
+```
+
+---
+
+## Flow 2: Employee Self-Service Profile Update
+
+```mermaid
+sequenceDiagram
+    participant E as Employee
+    participant T as employee/profile.html
+    participant C as EmployeeController
+    participant S as EmployeeServiceImpl
+    participant R as EmployeeRepository
+    participant DB as Database
+
+    E->>T: Navigate to /employee/profile
+    T->>C: GET /employee/profile
+    C->>S: getEmployeeById(currentEmployee.id)
+    S->>R: findById(id)
+    R->>DB: SELECT
+    DB-->>R: Employee
+    R-->>S: Employee
+    S-->>C: Employee (with dynamic category)
+    C-->>T: Model with employee data
+    
+    E->>T: Update Name/Phone/Address
+    T->>C: POST /employee/profile/update<br/>(EmployeeUpdateRequest)
+    
+    C->>S: updateEmployee(id, dto)
+    
+    alt Employee is EXITED
+        S-->>C: throws BusinessException<br/>"Profile updates not allowed"
+    else Employee is ACTIVE/NOTICE
+        S->>R: save(employee)
+        R->>DB: UPDATE
+        S-->>C: Updated Employee
+        C-->>T: redirect:/employee/profile + success
+    end
+```
+
+---
+
+## Flow 3: Employee Resignation (HR)
+
+```mermaid
+sequenceDiagram
+    participant HR as HR User
+    participant T as hr/employees.html
+    participant C as HrController
+    participant S as EmployeeServiceImpl
+    participant R as EmployeeRepository
+    participant DB as Database
+
+    HR->>T: Click "Resign" button
+    T->>C: POST /hr/employees/{id}/resign<br/>+ resignationDate
+    
+    C->>S: resignEmployee(id, date)
+    
+    Note over S: Validations:<br/>1. Only HR can resign<br/>2. Employee must be ACTIVE
+    
+    alt Validation Fails
+        S-->>C: throws BusinessException
+        C-->>T: redirect + error flash
+    else Valid
+        Note over S: Set status = NOTICE<br/>Set noticePeriodEndDate = date + 30 days
+        S->>R: save(employee)
+        R->>DB: UPDATE
+        S-->>C: void
+        C-->>T: redirect:/hr/employees + success
+    end
+```
+
+---
+
+## Flow 4: Employee Exit (HR)
+
+```mermaid
+sequenceDiagram
+    participant HR as HR User
+    participant T as hr/employees.html
+    participant C as HrController
+    participant S as EmployeeServiceImpl
+    participant R as EmployeeRepository
+    participant DB as Database
+
+    HR->>T: Click "Exit" button
+    T->>C: POST /hr/employees/{id}/exit
+    
+    C->>S: exitEmployee(id)
+    
+    Note over S: Validations:<br/>1. Only HR can exit<br/>2. Employee must be in NOTICE<br/>3. Notice period must be completed
+    
+    alt Validation Fails
+        S-->>C: throws BusinessException
+        C-->>T: redirect + error flash
+    else Valid
+        Note over S: Set status = EXITED
+        S->>R: save(employee)
+        R->>DB: UPDATE
+        S-->>C: void
+        C-->>T: redirect:/hr/employees + success
+    end
+```
+
+---
+
+## Component Details
+
+### Controllers
+
+| Controller | Endpoints | Purpose |
+|------------|-----------|---------|
+| [EmployeeController](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/employee/controller/EmployeeController.java) | `/employee/*` | Employee self-service (dashboard, profile, enrollments, claims) |
+| [HrController](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/hr/HrController.java) | `/hr/*` | HR employee management (create, resign, exit) |
+
+---
+
+### EmployeeService Methods
+
+| Method | Called By | Business Rules |
+|--------|-----------|----------------|
+| `getEmployeeById(id)` | EmployeeController | Applies dynamic category based on tenure |
+| `getAllEmployees()` | (unused in controllers) | - |
+| `registerEmployee(dto, orgId)` | HrController | Domain validation, email/phone uniqueness, age validation |
+| `updateEmployee(id, dto)` | EmployeeController | EXITED employees cannot update |
+| `deleteEmployee(id)` | (not exposed via UI) | Only HR can delete |
+| `resignEmployee(id, date)` | HrController | Only ACTIVE employees can resign |
+| `exitEmployee(id)` | HrController | Only NOTICE employees after 30 days |
+| `getEmployeeByEmail(email)` | EmployeeController | Used to get current logged-in employee |
+
+---
+
+### DTOs
+
+| DTO | Purpose | Fields |
+|-----|---------|--------|
+| [EmployeeCreateRequest](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/employee/dto/EmployeeCreateRequest.java) | HR creates employee | name, email, phone, designation, dob, joiningDate, address, password |
+| [EmployeeUpdateRequest](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/employee/dto/EmployeeUpdateRequest.java) | Employee self-update | name, phone, address (restricted fields for security) |
+
+---
+
+### Entity Model
+
+| Entity/Enum | Purpose |
+|-------------|---------|
+| [Employee](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/employee/model/Employee.java) | Main entity with all employee data |
+| [EmployeeAddress](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/employee/model/EmployeeAddress.java) | Embedded address (city, state, country, zipcode) |
+| [EmployeeStatus](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/employee/model/EmployeeStatus.java) | `ACTIVE`, `NOTICE`, `EXITED` |
+| `EmployeeCategory` | `JUNIOR` (< 5 years), `SENIOR` (≥ 5 years) - computed dynamically |
+
+---
+
+### Repository
+
+| Method | Purpose |
+|--------|---------|
+| `findById(id)` | Get employee by ID |
+| `findByEmail(email)` | Get employee by email (for login) |
+| `findByUser(user)` | Get employee by user account |
+| `findMaxSeqByOrganization(org)` | Generate employee code sequence |
+| `existsByPhoneNumber(phone)` | Unique phone validation |
+| `findByOrganizationOrganizationId(orgId)` | HR reports |
+
+---
+
+## Dynamic Category Resolution
+
+```mermaid
+flowchart TD
+    A[Get Employee] --> B{joiningDate null?}
+    B -->|Yes| C[Category = JUNIOR]
+    B -->|No| D{Years since joining >= 5?}
+    D -->|Yes| E[Category = SENIOR]
+    D -->|No| C
+```
+
+The category is **computed dynamically** every time an employee is fetched, based on tenure. It's not stored permanently in the database.
+
+---
+
+## File Structure
+
+```
+employee/
+├── controller/
+│   └── EmployeeController.java    # Employee self-service (/employee/*)
+├── dto/
+│   ├── EmployeeCreateRequest.java # HR creates employee (all fields)
+│   └── EmployeeUpdateRequest.java # Employee updates (limited fields)
+├── model/
+│   ├── Employee.java              # Main entity
+│   ├── EmployeeAddress.java       # Embedded address
+│   └── EmployeeStatus.java        # ACTIVE, NOTICE, EXITED
+├── repository/
+│   └── EmployeeRepository.java    # JPA repository
+└── service/
+    ├── EmployeeService.java       # Interface
+    └── EmployeeServiceImpl.java   # Implementation with business logic
+```
+
+---
+
+## Integration with Other Modules
+
+```mermaid
+flowchart LR
+    EMP[Employee Module] --> ENR[Enrollment Module]
+    EMP --> CLM[Claims Module]
+    EMP --> SEC[Security Module]
+    EMP --> ORG[Organization Module]
+    
+    ENR -->|"Employee enrolls in policies"| EMP
+    CLM -->|"Employee submits claims"| EMP
+    SEC -->|"User account linked to employee"| EMP
+    ORG -->|"Employee belongs to organization"| EMP
+```
+
+| Module | Relationship |
+|--------|--------------|
+| **Security** | `Employee.user` → `User` (1:1) - Login account |
+| **Organization** | `Employee.organization` → `Organization` (N:1) |
+| **Enrollment** | `Enrollment.employee` → `Employee` (N:1) |
+| **Claims** | `Claim.employee` → `Employee` (N:1) |

@@ -1,0 +1,372 @@
+# Admin Module Architecture
+
+## Overview
+
+The Admin module provides **insurance claim management** capabilities for organization administrators:
+- **Dashboard** - Overview of claim statistics and pending claims
+- **Claim Processing** - Approve or reject submitted claims
+- **Reports** - View organization-level reports
+
+> [!NOTE]
+> Admin is one of three roles in the system: `ADMIN`, `HR`, `EMPLOYEE`  
+> Admin users can **only** see claims from their own organization.
+
+---
+
+## Architecture Diagram
+
+```mermaid
+flowchart TD
+    subgraph UI["UI Layer (Templates)"]
+        ADMIN_DASH["admin/dashboard.html"]
+        ADMIN_CLAIMS["admin/claims.html"]
+        ADMIN_REPORTS["admin/reports.html"]
+    end
+
+    subgraph CTRL["Controller Layer"]
+        ADMIN_CTRL["AdminController"]
+    end
+
+    subgraph SVC["Service Layer"]
+        CLAIM_SVC["ClaimService"]
+        REPORT_SVC["ReportService"]
+    end
+
+    subgraph REPO["Repository Layer"]
+        CLAIM_REPO["ClaimRepository"]
+        EMP_REPO["EmployeeRepository"]
+        USER_REPO["UserRepository"]
+    end
+
+    subgraph MODEL["Entity Models"]
+        CLAIM["Claim"]
+        CLAIM_STATUS["ClaimStatus<br/>(SUBMITTED, APPROVED, REJECTED)"]
+    end
+
+    subgraph SEC["Security"]
+        SEC_CFG["SecurityConfig"]
+        SEC_UTIL["SecurityUtil"]
+    end
+
+    %% UI to Controller
+    ADMIN_DASH --> ADMIN_CTRL
+    ADMIN_CLAIMS -->|"POST /admin/claims/{id}/approve"| ADMIN_CTRL
+    ADMIN_CLAIMS -->|"POST /admin/claims/{id}/reject"| ADMIN_CTRL
+    ADMIN_REPORTS --> ADMIN_CTRL
+
+    %% Controller to Services
+    ADMIN_CTRL --> CLAIM_SVC
+    ADMIN_CTRL --> REPORT_SVC
+    ADMIN_CTRL --> SEC_UTIL
+
+    %% Services to Repositories
+    CLAIM_SVC --> CLAIM_REPO
+    ADMIN_CTRL --> CLAIM_REPO
+    ADMIN_CTRL --> EMP_REPO
+    ADMIN_CTRL --> USER_REPO
+
+    %% Security
+    SEC_CFG -->|"/admin/** requires ADMIN role"| ADMIN_CTRL
+```
+
+---
+
+## Admin Dashboard Overview
+
+```mermaid
+flowchart LR
+    subgraph Dashboard["Admin Dashboard"]
+        STATS["Statistics Cards"]
+        PENDING["Pending Claims Table<br/>(last 10)"]
+    end
+
+    subgraph Stats["Statistics"]
+        S1["Pending Claims Count"]
+        S2["Approved Claims Count"]
+        S3["Rejected Claims Count"]
+        S4["Total Employees"]
+    end
+
+    STATS --> S1
+    STATS --> S2
+    STATS --> S3
+    STATS --> S4
+```
+
+---
+
+## Flow 1: Admin Dashboard
+
+```mermaid
+sequenceDiagram
+    participant A as Admin User
+    participant T as admin/dashboard.html
+    participant C as AdminController
+    participant CR as ClaimRepository
+    participant ER as EmployeeRepository
+    participant UR as UserRepository
+
+    A->>T: Navigate to /admin/dashboard
+    T->>C: GET /admin/dashboard
+    
+    C->>UR: getCurrentUser()
+    UR-->>C: User (with organization)
+    
+    C->>CR: findAll()
+    CR-->>C: All Claims
+    
+    Note over C: Filter claims by:<br/>1. Organization match<br/>2. Status (SUBMITTED/APPROVED/REJECTED)
+    
+    C->>ER: findAll()
+    ER-->>C: All Employees
+    
+    Note over C: Count employees in org
+    
+    C-->>T: Model with:<br/>- pendingClaimsCount<br/>- approvedClaimsCount<br/>- rejectedClaimsCount<br/>- totalEmployees<br/>- pendingClaims (top 10)
+    
+    T-->>A: Rendered dashboard
+```
+
+---
+
+## Flow 2: View Claims Page
+
+```mermaid
+sequenceDiagram
+    participant A as Admin User
+    participant T as admin/claims.html
+    participant C as AdminController
+    participant CR as ClaimRepository
+    participant UR as UserRepository
+
+    A->>T: Navigate to /admin/claims
+    T->>C: GET /admin/claims
+    
+    C->>UR: getCurrentUser()
+    UR-->>C: User (with organization)
+    
+    C->>CR: findAll()
+    CR-->>C: All Claims
+    
+    Note over C: Split into:<br/>1. pendingClaims (SUBMITTED)<br/>2. processedClaims (APPROVED/REJECTED)<br/>Both filtered by organization
+    
+    C-->>T: Model with:<br/>- pendingClaims<br/>- processedClaims
+    
+    T-->>A: Claims page with two tables
+```
+
+---
+
+## Flow 3: Approve Claim
+
+```mermaid
+sequenceDiagram
+    participant A as Admin User
+    participant T as admin/claims.html
+    participant C as AdminController
+    participant S as ClaimService
+    participant CR as ClaimRepository
+    participant DB as Database
+
+    A->>T: Click "Approve" button
+    T->>C: POST /admin/claims/{claimId}/approve
+    
+    C->>S: approveClaim(claimId)
+    
+    Note over S: ClaimService.approveClaim():<br/>1. Get claim by ID<br/>2. Update status to APPROVED<br/>3. Set approvedAmount = claimAmount<br/>4. Save claim
+    
+    S->>CR: findById(claimId)
+    CR->>DB: SELECT
+    DB-->>CR: Claim
+    
+    S->>CR: save(claim)
+    CR->>DB: UPDATE status='APPROVED'
+    
+    S-->>C: Updated Claim
+    
+    C-->>T: redirect:/admin/claims<br/>+ success flash message
+    
+    T-->>A: Claims page with success
+```
+
+---
+
+## Flow 4: Reject Claim
+
+```mermaid
+sequenceDiagram
+    participant A as Admin User
+    participant T as admin/claims.html
+    participant C as AdminController
+    participant S as ClaimService
+    participant CR as ClaimRepository
+    participant DB as Database
+
+    A->>T: Click "Reject" button
+    T->>C: POST /admin/claims/{claimId}/reject<br/>+ rejectionReason
+    
+    alt Rejection reason empty
+        C-->>T: redirect:/admin/claims<br/>+ error: "Rejection reason is mandatory"
+    else Valid reason
+        C->>S: rejectClaim(claimId, rejectionReason)
+        
+        Note over S: ClaimService.rejectClaim():<br/>1. Get claim by ID<br/>2. Update status to REJECTED<br/>3. Set rejectionReason<br/>4. Set approvedAmount = 0<br/>5. Save claim
+        
+        S->>CR: findById(claimId)
+        CR->>DB: SELECT
+        DB-->>CR: Claim
+        
+        S->>CR: save(claim)
+        CR->>DB: UPDATE status='REJECTED'
+        
+        S-->>C: Updated Claim
+        
+        C-->>T: redirect:/admin/claims<br/>+ success flash message
+    end
+    
+    T-->>A: Claims page with result
+```
+
+---
+
+## Flow 5: Admin Reports
+
+```mermaid
+sequenceDiagram
+    participant A as Admin User
+    participant T as admin/reports.html
+    participant C as AdminController
+    participant RS as ReportService
+    participant DB as Database
+
+    A->>T: Navigate to /admin/reports
+    T->>C: GET /admin/reports
+    
+    C->>RS: getEmployeeCountByOrganization(orgId)
+    RS->>DB: JPQL Query
+    DB-->>RS: List<EmployeeReportDto>
+    
+    C->>RS: getPremiumCollectedByOrganization(orgId)
+    RS->>DB: JPQL Query
+    DB-->>RS: List<PremiumReportDto>
+    
+    C->>RS: getClaimSummaryByEnrollment()
+    RS->>DB: JPQL Query
+    DB-->>RS: List<ClaimReportDto>
+    
+    C-->>T: Model with all reports
+    
+    T-->>A: Reports page with tables
+```
+
+---
+
+## Claim Status Flow
+
+```mermaid
+stateDiagram-v2
+    [*] --> SUBMITTED: Employee submits claim
+    SUBMITTED --> APPROVED: Admin approves
+    SUBMITTED --> REJECTED: Admin rejects
+    APPROVED --> [*]: Claim closed
+    REJECTED --> [*]: Claim closed
+```
+
+---
+
+## Component Details
+
+### Controller Endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/admin/dashboard` | GET | Dashboard with stats and pending claims |
+| `/admin/claims` | GET | View all pending and processed claims |
+| `/admin/claims/{id}/approve` | POST | Approve a submitted claim |
+| `/admin/claims/{id}/reject` | POST | Reject a claim (requires reason) |
+| `/admin/reports` | GET | View organization reports |
+
+---
+
+### Dependencies Used
+
+| Dependency | Purpose |
+|------------|---------|
+| `ClaimRepository` | Direct access to claims (for filtering by status) |
+| `ClaimService` | Business logic for approve/reject |
+| `EmployeeRepository` | Count employees in organization |
+| `UserRepository` | Get current admin's organization |
+| `ReportService` | Generate report data |
+| `SecurityUtil` | Get current logged-in user email |
+
+---
+
+### Security Configuration
+
+```java
+// From SecurityConfig.java
+.requestMatchers("/admin/**").hasRole("ADMIN")
+```
+
+Only users with `ROLE_ADMIN` can access `/admin/*` endpoints.
+
+---
+
+## UI Templates
+
+| Template | Purpose | Key Elements |
+|----------|---------|--------------|
+| [admin/dashboard.html](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/resources/templates/admin/dashboard.html) | Statistics overview | Stats cards, pending claims table |
+| [admin/claims.html](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/resources/templates/admin/claims.html) | Claim management | Pending/Processed tabs, Approve/Reject buttons |
+| [admin/reports.html](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/resources/templates/admin/reports.html) | Report viewing | Employee, Premium, Claim summary tables |
+
+---
+
+## File Structure
+
+```
+admin/
+└── AdminController.java    # Single controller with all admin functionality
+    ├── dashboard()         # GET /admin/dashboard
+    ├── claims()            # GET /admin/claims
+    ├── approveClaim()      # POST /admin/claims/{id}/approve
+    ├── rejectClaim()       # POST /admin/claims/{id}/reject
+    └── reports()           # GET /admin/reports
+```
+
+> [!NOTE]
+> The Admin module is lightweight - just one controller file.  
+> It relies on `ClaimService` for business logic and `ReportService` for reports.
+
+---
+
+## Integration with Other Modules
+
+```mermaid
+flowchart LR
+    ADMIN[Admin Module] --> CLAIM[Claim Module]
+    ADMIN --> REPORT[Report Module]
+    ADMIN --> SEC[Security Module]
+    ADMIN --> ORG[Organization Module]
+    
+    CLAIM -->|"approveClaim, rejectClaim"| ADMIN
+    REPORT -->|"getEmployeeCount, getPremium, getClaimSummary"| ADMIN
+    SEC -->|"getCurrentUserEmail, hasRole ADMIN"| ADMIN
+    ORG -->|"Organization scoping"| ADMIN
+```
+
+| Module | Relationship |
+|--------|--------------|
+| **Claim** | Admin approves/rejects claims via `ClaimService` |
+| **Report** | Admin views org-scoped reports via `ReportService` |
+| **Security** | Admin access controlled by `ROLE_ADMIN` |
+| **Organization** | All data filtered by admin's organization |
+
+---
+
+## Key Business Rules
+
+1. **Organization Scoping**: Admin can only see claims from their own organization
+2. **Rejection Requires Reason**: `rejectionReason` is mandatory when rejecting
+3. **No Partial Approval**: Full claim amount is approved (no partial amounts)
+4. **Single Controller**: All admin functionality in one compact controller

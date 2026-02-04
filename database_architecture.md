@@ -1,0 +1,794 @@
+# Database Integration Architecture Deep Dive
+
+## Overview
+
+This document explains how your application connects to and interacts with MySQL database:
+1. **Technology Stack** - Spring Data JPA → Hibernate ORM → JDBC → MySQL
+2. **Configuration** - How database connection is set up
+3. **Entity Mapping** - How Java objects map to database tables
+4. **Repository Layer** - How queries are generated and executed
+5. **Transaction Management** - How data integrity is maintained
+6. **Your Implementation** - All your repositories and entities
+
+---
+
+## Part 1: The Complete Data Layer Stack
+
+### Technology Layers
+
+```mermaid
+flowchart TD
+    subgraph APP["Your Application Code"]
+        CTRL["Controller"]
+        SVC["Service"]
+        REPO["Repository<br/>(JpaRepository interface)"]
+    end
+
+    subgraph SPRING["Spring Data JPA"]
+        PROXY["Repository Proxy<br/>(Auto-generated at runtime)"]
+        EM["EntityManager"]
+    end
+
+    subgraph HIBERNATE["Hibernate ORM"]
+        SESS["Session<br/>(First Level Cache)"]
+        CACHE["Second Level Cache<br/>(Optional)"]
+        SQL["SQL Generator"]
+    end
+
+    subgraph JDBC["JDBC Layer"]
+        DS["DataSource<br/>(HikariCP Connection Pool)"]
+        CONN["Connection"]
+        PS["PreparedStatement"]
+    end
+
+    subgraph DRIVER["MySQL JDBC Driver"]
+        DV["mysql-connector-j"]
+    end
+
+    subgraph DB["MySQL Database"]
+        MYSQL["MySQL Server<br/>localhost:3306"]
+        TABLES["healthinsurance DB"]
+    end
+
+    CTRL --> SVC
+    SVC --> REPO
+    REPO --> PROXY
+    PROXY --> EM
+    EM --> SESS
+    SESS --> SQL
+    SQL --> DS
+    DS --> CONN
+    CONN --> PS
+    PS --> DV
+    DV --> MYSQL
+    MYSQL --> TABLES
+```
+
+---
+
+### Layer Explanation
+
+| Layer | Component | Purpose |
+|-------|-----------|---------|
+| **Application** | `JpaRepository` | Your interface defining data access methods |
+| **Spring Data JPA** | Repository Proxy | Auto-implements your interface at runtime |
+| **Spring Data JPA** | `EntityManager` | JPA standard API for persistence operations |
+| **Hibernate** | `Session` | Hibernate's implementation of EntityManager |
+| **Hibernate** | SQL Generator | Converts JPQL/method names to SQL |
+| **JDBC** | `HikariCP` | Connection pool (fast, efficient) |
+| **JDBC** | `Connection` | Single database connection |
+| **JDBC** | `PreparedStatement` | Executes parameterized SQL |
+| **Driver** | `mysql-connector-j` | MySQL-specific JDBC implementation |
+| **Database** | MySQL Server | Actual data storage |
+
+---
+
+## Part 2: Your Database Configuration
+
+### application.properties
+
+```properties
+# Database Connection
+spring.datasource.url=jdbc:mysql://localhost:3306/healthinsurance?createDatabaseIfNotExist=true
+spring.datasource.username=root
+spring.datasource.password=root
+spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver
+
+# JPA/Hibernate Settings
+spring.jpa.show-sql=true                              # Log all SQL to console
+spring.jpa.hibernate.ddl-auto=update                  # Auto-update schema
+spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.MySQLDialect
+
+# Initial Data
+spring.sql.init.mode=always                           # Run data.sql on startup
+spring.jpa.defer-datasource-initialization=true       # Run data.sql after Hibernate schema
+```
+
+### Configuration Flow at Startup
+
+```mermaid
+sequenceDiagram
+    participant APP as Spring Boot
+    participant AC as AutoConfiguration
+    participant DS as DataSource (HikariCP)
+    participant EM as EntityManagerFactory
+    participant HB as Hibernate
+    participant DB as MySQL
+
+    APP->>AC: Application starts
+    
+    Note over AC: Read application.properties
+    
+    AC->>DS: Create DataSource<br/>url=jdbc:mysql://localhost:3306/healthinsurance
+    DS->>DB: Open connection pool (10 connections)
+    DB-->>DS: Connections ready
+    
+    AC->>EM: Create EntityManagerFactory
+    EM->>HB: Initialize Hibernate
+    
+    HB->>HB: Scan @Entity classes
+    
+    Note over HB: Found entities:<br/>User, Employee, Organization,<br/>Policy, Enrollment, Claim, Dependent
+    
+    HB->>DB: Generate/Update DDL<br/>(ddl-auto=update)
+    DB-->>HB: Tables created/updated
+    
+    Note over APP: Schema ready
+    
+    APP->>DB: Execute data.sql
+    DB-->>APP: Initial data inserted
+    
+    APP->>APP: Run DataInitializer<br/>(CommandLineRunner)
+    
+    Note over APP: Application ready on port 5612
+```
+
+---
+
+## Part 3: Entity to Table Mapping
+
+### How Hibernate Maps Java Classes to Tables
+
+```mermaid
+flowchart LR
+    subgraph JAVA["Java Entity Class"]
+        E1["@Entity<br/>public class User"]
+        F1["@Id Long userId"]
+        F2["@Column String email"]
+        F3["@ManyToOne Organization org"]
+    end
+
+    subgraph SQL["MySQL Table"]
+        T1["TABLE users"]
+        C1["user_id BIGINT PRIMARY KEY"]
+        C2["email VARCHAR(255) UNIQUE"]
+        C3["organization_id BIGINT FK"]
+    end
+
+    E1 --> T1
+    F1 --> C1
+    F2 --> C2
+    F3 --> C3
+```
+
+### Your Entity Classes Mapped to Tables
+
+| Entity Class | Table Name | Key Annotations |
+|--------------|------------|-----------------|
+| `User` | `users` | `@Entity`, `@Table(name="users")` |
+| `Employee` | `employee` | `@Entity`, `@Embedded EmployeeAddress` |
+| `Organization` | `organization` | `@Entity`, `@OneToMany employees` |
+| `Policy` | `policy` | `@Entity`, `@ManyToOne organization` |
+| `Enrollment` | `enrollment` | `@Entity`, `@ManyToOne employee, policy` |
+| `Claim` | `claim` | `@Entity`, `@ManyToOne employee, enrollment` |
+| `Dependent` | `dependent` | `@Entity`, `@ManyToOne enrollment` |
+
+---
+
+### Entity Relationship Diagram
+
+```mermaid
+erDiagram
+    ORGANIZATION ||--o{ USER : has
+    ORGANIZATION ||--o{ EMPLOYEE : employs
+    ORGANIZATION ||--o{ POLICY : offers
+    
+    USER ||--o| EMPLOYEE : "linked to"
+    
+    EMPLOYEE ||--o{ ENROLLMENT : enrolls_in
+    EMPLOYEE ||--o{ CLAIM : submits
+    
+    POLICY ||--o{ ENROLLMENT : covers
+    
+    ENROLLMENT ||--o{ CLAIM : has
+    ENROLLMENT ||--o{ DEPENDENT : includes
+    
+    ORGANIZATION {
+        Long organizationId PK
+        String organizationName
+        String orgCode
+    }
+    
+    USER {
+        Long userId PK
+        String email UK
+        String password
+        Role role
+        Long organization_id FK
+        boolean active
+    }
+    
+    EMPLOYEE {
+        Long employeeId PK
+        String employeeName
+        String email UK
+        String employeeCode UK
+        Long organization_id FK
+        Long user_id FK
+        EmployeeStatus status
+    }
+    
+    POLICY {
+        Long policyId PK
+        String policyName
+        PolicyType policyType
+        Double coverageAmount
+        Double basePremium
+        Long organization_id FK
+    }
+    
+    ENROLLMENT {
+        Long enrollmentId PK
+        Long employee_id FK
+        Long policy_id FK
+        Double premiumAmount
+        EnrollmentStatus status
+    }
+    
+    CLAIM {
+        Long claimId PK
+        Long employee_id FK
+        Long enrollment_id FK
+        Double claimAmount
+        ClaimStatus status
+    }
+    
+    DEPENDENT {
+        Long dependentId PK
+        Long enrollment_id FK
+        String name
+        String relationship
+    }
+```
+
+---
+
+## Part 4: Repository Layer - How Queries Work
+
+### Spring Data JPA Magic
+
+You define an **interface**, Spring creates the **implementation** at runtime:
+
+```java
+// YOU WRITE THIS (just the interface)
+public interface UserRepository extends JpaRepository<User, Long> {
+    Optional<User> findByEmail(String email);
+}
+
+// SPRING GENERATES THIS (at runtime)
+public class UserRepositoryImpl implements UserRepository {
+    
+    @PersistenceContext
+    private EntityManager entityManager;
+    
+    @Override
+    public Optional<User> findByEmail(String email) {
+        String jpql = "SELECT u FROM User u WHERE u.email = :email";
+        TypedQuery<User> query = entityManager.createQuery(jpql, User.class);
+        query.setParameter("email", email);
+        return query.getResultStream().findFirst();
+    }
+    
+    // All other methods (save, findById, delete, etc.) also generated
+}
+```
+
+### Query Generation from Method Names
+
+```mermaid
+flowchart LR
+    M["findByEmail(email)"] --> P["Parse method name"]
+    P --> K["Keywords: find, By, Email"]
+    P --> Q["Generate JPQL:<br/>SELECT u FROM User u<br/>WHERE u.email = :email"]
+    Q --> S["Generate SQL:<br/>SELECT * FROM users<br/>WHERE email = ?"]
+```
+
+### Your Repositories
+
+| Repository | Entity | Custom Methods |
+|------------|--------|----------------|
+| [UserRepository](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/security/repository/UserRepository.java) | User | `findByEmail(email)` |
+| [EmployeeRepository](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/employee/repository/EmployeeRepository.java) | Employee | `findByUser`, `findByEmail`, `existsByPhoneNumber`, `findMaxSeqByOrganization` |
+| [OrganizationRepository](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/organization/repository/OrganizationRepository.java) | Organization | `findByOrganizationName` |
+| [PolicyRepository](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/policy/repository/PolicyRepository.java) | Policy | `findByOrganization` |
+| [EnrollmentRepository](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/enrollment/repository/EnrollmentRepository.java) | Enrollment | `findByEmployee`, `findByPolicy`, `existsByEmployeeAndPolicyAndEnrollmentStatus` |
+| [ClaimRepository](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/claim/repository/ClaimRepository.java) | Claim | `findByEmployee`, `sumApprovedClaimsByEnrollmentId`, `existsActiveClaimForEnrollment` |
+
+---
+
+## Part 5: Complete Query Execution Flow
+
+### Example: Login - Finding User by Email
+
+```mermaid
+sequenceDiagram
+    participant C as CustomUserDetailsService
+    participant R as UserRepository (Proxy)
+    participant EM as EntityManager
+    participant S as Hibernate Session
+    participant CACHE as First Level Cache
+    participant SQL as SQL Generator
+    participant DS as HikariCP
+    participant CONN as Connection
+    participant DB as MySQL
+
+    C->>R: userRepository.findByEmail("hr@cognizant.com")
+    
+    Note over R: Spring Data JPA Proxy<br/>intercepts the call
+    
+    R->>EM: createQuery("SELECT u FROM User u WHERE u.email = :email")
+    
+    EM->>S: Create query
+    
+    S->>CACHE: Check cache for email="hr@cognizant.com"
+    
+    alt Found in cache
+        CACHE-->>S: Return cached User
+    else Not in cache
+        S->>SQL: Generate SQL
+        SQL-->>S: SELECT * FROM users WHERE email = ?
+        
+        S->>DS: Get connection from pool
+        DS-->>S: Connection #3
+        
+        S->>CONN: Prepare statement
+        CONN->>DB: SELECT * FROM users WHERE email = 'hr@cognizant.com'
+        DB-->>CONN: ResultSet (1 row)
+        
+        CONN-->>S: ResultSet
+        S->>S: Hydrate User entity from ResultSet
+        S->>CACHE: Store in First Level Cache
+    end
+    
+    S-->>EM: User entity
+    EM-->>R: Optional<User>
+    R-->>C: Optional<User>
+```
+
+---
+
+## Part 6: Transaction Management
+
+### How Transactions Work
+
+```mermaid
+sequenceDiagram
+    participant C as Controller
+    participant S as Service
+    participant R as Repository
+    participant TM as TransactionManager
+    participant CONN as Connection
+    participant DB as MySQL
+
+    C->>S: createEmployee(dto)
+    
+    Note over S: @Transactional starts here
+    
+    S->>TM: Begin transaction
+    TM->>CONN: setAutoCommit(false)
+    
+    S->>R: userRepository.save(user)
+    R->>DB: INSERT INTO users VALUES (...)
+    
+    S->>R: employeeRepository.save(employee)
+    R->>DB: INSERT INTO employee VALUES (...)
+    
+    alt Success
+        S-->>TM: Method completes normally
+        TM->>CONN: COMMIT
+        CONN->>DB: COMMIT
+        TM-->>S: Transaction committed
+    else Exception thrown
+        S-->>TM: Exception
+        TM->>CONN: ROLLBACK
+        CONN->>DB: ROLLBACK
+        TM-->>S: Transaction rolled back
+    end
+    
+    S-->>C: Result or Exception
+```
+
+### Transaction Propagation
+
+```java
+// Example from your EmployeeServiceImpl
+@Override
+@Transactional  // Spring manages transaction
+public Employee registerEmployee(EmployeeCreateRequest dto, Long organizationId) {
+    
+    // All of these happen in ONE transaction:
+    
+    // 1. Create User
+    User user = new User();
+    user.setEmail(dto.getEmail());
+    user.setPassword(passwordEncoder.encode(dto.getPassword()));
+    userRepository.save(user);  // INSERT INTO users
+    
+    // 2. Create Employee
+    Employee employee = new Employee();
+    employee.setEmployeeName(dto.getEmployeeName());
+    employee.setUser(user);
+    employeeRepository.save(employee);  // INSERT INTO employee
+    
+    // If ANY exception here → ROLLBACK both inserts
+    // If success → COMMIT both
+    
+    return employee;
+}
+```
+
+---
+
+## Part 7: Hibernate Session & Caching
+
+### First Level Cache (Session)
+
+```mermaid
+flowchart TD
+    subgraph SESSION["Hibernate Session (Per Request)"]
+        CACHE["First Level Cache<br/>(Identity Map)"]
+        Q1["findById(1)"] --> CACHE
+        Q2["findById(1) again"] --> CACHE
+        CACHE --> DB["Database<br/>(Only once!)"]
+    end
+```
+
+```java
+// First call - hits database
+User user1 = userRepository.findById(1L);  // SQL: SELECT * FROM users WHERE user_id = 1
+
+// Second call - returns SAME object from cache (no SQL)
+User user2 = userRepository.findById(1L);  // No SQL executed!
+
+// They are the SAME object in memory
+assert user1 == user2;  // true!
+```
+
+### Dirty Checking & Automatic Updates
+
+```java
+@Transactional
+public void updateUserEmail(Long userId, String newEmail) {
+    // Load entity (now managed by Session)
+    User user = userRepository.findById(userId).orElseThrow();
+    
+    // Modify entity (NO save() call needed!)
+    user.setEmail(newEmail);
+    
+    // At transaction commit, Hibernate:
+    // 1. Detects the field changed (dirty checking)
+    // 2. Automatically generates: UPDATE users SET email = ? WHERE user_id = ?
+    // 3. Executes the SQL
+}
+// Transaction commits here → SQL executed automatically
+```
+
+---
+
+## Part 8: Connection Pooling (HikariCP)
+
+### Why Connection Pooling?
+
+```mermaid
+flowchart TD
+    subgraph WITHOUT["Without Pool (Slow)"]
+        R1["Request 1"] --> C1["Create Connection<br/>(500ms)"]
+        C1 --> Q1["Execute Query"]
+        Q1 --> X1["Close Connection"]
+        
+        R2["Request 2"] --> C2["Create Connection<br/>(500ms)"]
+        C2 --> Q2["Execute Query"]
+        Q2 --> X2["Close Connection"]
+    end
+
+    subgraph WITH["With HikariCP Pool (Fast)"]
+        R3["Request 1"] --> P["Pool of 10<br/>Pre-created Connections"]
+        R4["Request 2"] --> P
+        R5["Request 3"] --> P
+        P --> Q3["Execute Query<br/>(Reuse connection)"]
+    end
+```
+
+### HikariCP Default Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `maximumPoolSize` | 10 | Max connections in pool |
+| `minimumIdle` | 10 | Min idle connections |
+| `connectionTimeout` | 30000ms | Wait time for connection |
+| `idleTimeout` | 600000ms | Max idle time before eviction |
+| `maxLifetime` | 1800000ms | Max connection lifetime |
+
+---
+
+## Part 9: Complete Save Operation Flow
+
+### Example: Creating New Employee
+
+```mermaid
+sequenceDiagram
+    participant C as Controller
+    participant S as EmployeeServiceImpl
+    participant UR as UserRepository
+    participant ER as EmployeeRepository
+    participant EM as EntityManager
+    participant HB as Hibernate
+    participant DS as HikariCP
+    participant DB as MySQL
+
+    C->>S: registerEmployee(dto, orgId)
+    
+    Note over S: @Transactional begins
+    
+    S->>S: Create User object
+    S->>UR: userRepository.save(user)
+    
+    UR->>EM: persist(user)
+    EM->>HB: Session.persist(user)
+    
+    Note over HB: 1. Add to First Level Cache<br/>2. Mark as INSERT pending
+    
+    S->>S: Create Employee object
+    S->>ER: employeeRepository.save(employee)
+    
+    ER->>EM: persist(employee)
+    EM->>HB: Session.persist(employee)
+    
+    Note over S: Method returns
+    Note over S: @Transactional commits
+    
+    HB->>HB: Flush pending changes
+    
+    HB->>DS: Get connection
+    DS-->>HB: Connection from pool
+    
+    HB->>DB: INSERT INTO users (email, password, ...) VALUES (?, ?, ...)
+    DB-->>HB: Generated ID: 15
+    
+    HB->>HB: Set user.userId = 15
+    
+    HB->>DB: INSERT INTO employee (employee_name, user_id, ...) VALUES (?, 15, ...)
+    DB-->>HB: Generated ID: 42
+    
+    HB->>DB: COMMIT
+    DB-->>HB: OK
+    
+    HB->>DS: Return connection to pool
+    
+    S-->>C: Employee (id=42)
+```
+
+---
+
+## Part 10: Query Types in Your Project
+
+### 1. Derived Query Methods (Method Name Parsing)
+
+```java
+// Spring generates SQL from method name
+Optional<User> findByEmail(String email);
+// → SELECT * FROM users WHERE email = ?
+
+boolean existsByPhoneNumber(Long phoneNumber);
+// → SELECT COUNT(*) > 0 FROM employee WHERE phone_number = ?
+
+List<Enrollment> findByEmployeeAndEnrollmentStatus(Employee emp, EnrollmentStatus status);
+// → SELECT * FROM enrollment WHERE employee_id = ? AND enrollment_status = ?
+```
+
+### 2. Custom JPQL Queries (@Query)
+
+```java
+// From EmployeeRepository
+@Query("""
+    SELECT coalesce(max(e.employeeSeq), 0)
+    FROM Employee e
+    WHERE e.organization = :org
+""")
+Long findMaxSeqByOrganization(@Param("org") Organization org);
+
+// From ClaimRepository
+@Query("""
+    SELECT COALESCE(SUM(c.approvedAmount), 0)
+    FROM Claim c
+    WHERE c.enrollment.enrollmentId = :enrollmentId
+      AND c.claimStatus = 'APPROVED'
+""")
+Double sumApprovedClaimsByEnrollmentId(@Param("enrollmentId") Long enrollmentId);
+```
+
+### 3. Native SQL (for Reports - EntityManager)
+
+```java
+// From ReportServiceImpl - using EntityManager directly
+@PersistenceContext
+private EntityManager em;
+
+public List<EmployeeReportDto> getEmployeeCountByOrganization(Long organizationId) {
+    String query = """
+        SELECT new com.employeeinsurancemanagement.report.dto.EmployeeReportDto(
+            o.organizationId,
+            o.organizationName,
+            COUNT(e)
+        )
+        FROM Organization o
+        LEFT JOIN o.employee e
+        WHERE (:orgId IS NULL OR o.organizationId = :orgId)
+        GROUP BY o.organizationId, o.organizationName
+    """;
+    return em.createQuery(query, EmployeeReportDto.class)
+            .setParameter("orgId", organizationId)
+            .getResultList();
+}
+```
+
+---
+
+## Part 11: Your Data Initialization Flow
+
+### Startup Sequence
+
+```mermaid
+sequenceDiagram
+    participant BOOT as Spring Boot
+    participant HB as Hibernate
+    participant DB as MySQL
+    participant SQL as data.sql
+    participant DI as DataInitializer
+
+    BOOT->>BOOT: Start application
+    
+    BOOT->>HB: Initialize Hibernate
+    HB->>DB: Connect to healthinsurance
+    
+    alt Database doesn't exist
+        DB-->>HB: Error
+        HB->>DB: CREATE DATABASE healthinsurance
+    end
+    
+    HB->>HB: Scan @Entity classes
+    HB->>DB: DDL: CREATE TABLE organization...
+    HB->>DB: DDL: CREATE TABLE users...
+    HB->>DB: DDL: CREATE TABLE employee...
+    HB->>DB: DDL: CREATE TABLE policy...
+    HB->>DB: DDL: CREATE TABLE enrollment...
+    HB->>DB: DDL: CREATE TABLE claim...
+    HB->>DB: DDL: CREATE TABLE dependent...
+    
+    Note over BOOT: Schema ready
+    
+    BOOT->>SQL: Execute data.sql
+    SQL->>DB: INSERT IGNORE INTO organization...
+    SQL->>DB: INSERT IGNORE INTO policy...
+    
+    Note over BOOT: Static data loaded
+    
+    BOOT->>DI: Run CommandLineRunner
+    DI->>DB: Check if admin@cognizant.com exists
+    
+    alt User doesn't exist
+        DI->>DB: INSERT INTO users (email, password, role, ...)
+    end
+    
+    Note over BOOT: Application ready on port 5612
+```
+
+### Two-Phase Initialization
+
+| Phase | File | Purpose |
+|-------|------|---------|
+| **1. data.sql** | `resources/data.sql` | Static data (Organizations, Policies) |
+| **2. DataInitializer** | `bootstrap/DataInitializer.java` | Dynamic data (needs PasswordEncoder) |
+
+---
+
+## Part 12: Validation Flow
+
+### Bean Validation (JSR-380)
+
+```mermaid
+flowchart TD
+    subgraph CONTROLLER["Controller Layer"]
+        C["@Valid @ModelAttribute<br/>EmployeeCreateRequest dto"]
+    end
+
+    subgraph VALIDATION["Validation Framework"]
+        V["Hibernate Validator"]
+        A1["@NotBlank on employeeName"]
+        A2["@Email on email"]
+        A3["@Pattern on phoneNumber"]
+        A4["@ValidAge on dateOfBirth"]
+    end
+
+    subgraph RESULT["Validation Result"]
+        BR["BindingResult"]
+        ERR["hasErrors() ?"]
+    end
+
+    C --> V
+    V --> A1
+    V --> A2
+    V --> A3
+    V --> A4
+    A1 --> BR
+    A2 --> BR
+    A3 --> BR
+    A4 --> BR
+    BR --> ERR
+```
+
+### Your Custom Validator: @ValidAge
+
+```java
+// Annotation
+@Target({ElementType.FIELD})
+@Retention(RetentionPolicy.RUNTIME)
+@Constraint(validatedBy = AgeValidator.class)
+public @interface ValidAge {
+    int min() default 18;
+    int max() default 70;
+    String message() default "Invalid age";
+}
+
+// Validator
+public class AgeValidator implements ConstraintValidator<ValidAge, LocalDate> {
+    private int min;
+    private int max;
+    
+    @Override
+    public void initialize(ValidAge annotation) {
+        this.min = annotation.min();
+        this.max = annotation.max();
+    }
+    
+    @Override
+    public boolean isValid(LocalDate dateOfBirth, ConstraintValidatorContext context) {
+        if (dateOfBirth == null) return true;
+        int age = Period.between(dateOfBirth, LocalDate.now()).getYears();
+        return age >= min && age <= max;
+    }
+}
+```
+
+---
+
+## Summary: Data Flow from UI to Database
+
+```mermaid
+flowchart TD
+    A["1️⃣ User submits form"] --> B["2️⃣ Controller receives request"]
+    B --> C["3️⃣ Bean Validation<br/>(@Valid)"]
+    C -->|Invalid| D["Return form with errors"]
+    C -->|Valid| E["4️⃣ Service layer<br/>(@Transactional)"]
+    E --> F["5️⃣ Repository interface call"]
+    F --> G["6️⃣ Spring Data JPA Proxy<br/>(Auto-generated impl)"]
+    G --> H["7️⃣ EntityManager"]
+    H --> I["8️⃣ Hibernate Session"]
+    I --> J["9️⃣ Generate SQL"]
+    J --> K["🔟 HikariCP<br/>Get connection"]
+    K --> L["1️⃣1️⃣ JDBC PreparedStatement"]
+    L --> M["1️⃣2️⃣ MySQL Connector/J"]
+    M --> N["1️⃣3️⃣ MySQL Database"]
+    N --> O["1️⃣4️⃣ Response flows back"]
+    O --> P["1️⃣5️⃣ View rendered"]
+```

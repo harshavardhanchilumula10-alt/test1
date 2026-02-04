@@ -1,0 +1,1086 @@
+# Complete Annotation Reference Guide
+
+## Overview
+
+This document explains **every annotation** used in your Employee Insurance Management project:
+- **What it is** - Is it an interface, class, or meta-annotation?
+- **What it does** - Its purpose and function
+- **How it works** - Internal mechanism
+- **Where you use it** - Examples from your code
+
+---
+
+## Understanding Annotations
+
+### What is an Annotation in Java?
+
+An **annotation** is a special **interface** (declared with `@interface`) that provides metadata about your code. Annotations don't contain logic themselves - they are markers that are read by:
+- The **Java Compiler** (compile-time)
+- **Reflection** at runtime
+- **Annotation Processors** (build-time code generation)
+
+```java
+// This is how an annotation is defined (it's an interface!)
+public @interface MyAnnotation {
+    String value() default "";
+}
+```
+
+---
+
+## Part 1: Spring Framework Annotations
+
+### Stereotype Annotations (Component Scanning)
+
+These annotations mark classes as Spring-managed beans. They are all **interfaces** that extend (meta-annotate) `@Component`.
+
+---
+
+#### `@Component`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Marks a class as a Spring-managed bean |
+| **How it works** | Spring's component scanner finds this annotation and creates a singleton instance in the Application Context |
+| **Used in your project** | Base annotation, used by `@Service`, `@Controller`, `@Repository` |
+
+```java
+// Any class marked with @Component (or its derivatives) becomes a Spring bean
+@Component
+public class MyHelper { }
+```
+
+---
+
+#### `@Service`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **Meta-annotated with** | `@Component` |
+| **What it does** | Marks a class as a business service layer bean |
+| **How it works** | Semantically indicates business logic; behaves identically to `@Component` |
+| **Where you use it** | `EmployeeServiceImpl`, `ClaimServiceImpl`, `EnrollmentServiceImpl`, `ReportServiceImpl`, `PolicyServiceImpl`, `PremiumCalculatorService`, `CustomUserDetailsService`, `HrReportService` |
+
+```java
+@Service
+@RequiredArgsConstructor
+public class EmployeeServiceImpl implements EmployeeService {
+    // Spring creates ONE instance and injects dependencies
+}
+```
+
+---
+
+#### `@Repository`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **Meta-annotated with** | `@Component` |
+| **What it does** | Marks a class/interface as a data access layer bean |
+| **How it works** | Enables exception translation (converts JDBC exceptions to Spring's `DataAccessException`) |
+| **Where you use it** | `UserRepository`, `EmployeeRepository`, `EnrollmentRepository`, `ClaimRepository`, `PolicyRepository`, `OrganizationRepository` |
+
+```java
+@Repository
+public interface UserRepository extends JpaRepository<User, Long> {
+    // Spring Data JPA creates the implementation at runtime
+}
+```
+
+---
+
+#### `@Controller`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **Meta-annotated with** | `@Component` |
+| **What it does** | Marks a class as a web MVC controller (returns views) |
+| **How it works** | Enables `@RequestMapping` methods to return view names that ViewResolver processes |
+| **Where you use it** | `HrController`, `AdminController`, `EmployeeController`, `AuthController`, `DashboardController`, `ErrorPageController`, `ReportController` |
+
+```java
+@Controller
+@RequestMapping("/hr")
+public class HrController {
+    
+    @GetMapping("/employees")
+    public String employees(Model model) {
+        return "hr/employees";  // Returns view name
+    }
+}
+```
+
+---
+
+#### `@ControllerAdvice`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **Meta-annotated with** | `@Component` |
+| **What it does** | Marks a class as a global exception handler/model enhancer for all controllers |
+| **How it works** | Spring MVC applies `@ExceptionHandler` methods in this class to ALL controllers |
+| **Where you use it** | `GlobalExceptionHandler` |
+
+```java
+@ControllerAdvice
+public class GlobalExceptionHandler {
+    
+    @ExceptionHandler(BusinessException.class)
+    public String handleBusinessException(BusinessException ex, RedirectAttributes ra) {
+        ra.addFlashAttribute("error", ex.getMessage());
+        return "redirect:/dashboard";
+    }
+}
+```
+
+---
+
+#### `@Configuration`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **Meta-annotated with** | `@Component` |
+| **What it does** | Marks a class as a source of bean definitions |
+| **How it works** | Methods annotated with `@Bean` become factory methods for Spring beans |
+| **Where you use it** | `SecurityConfig` |
+
+```java
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+    
+    @Bean  // This method's return value becomes a Spring bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+}
+```
+
+---
+
+#### `@SpringBootApplication`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **Combines** | `@Configuration` + `@EnableAutoConfiguration` + `@ComponentScan` |
+| **What it does** | Main entry point annotation for Spring Boot applications |
+| **How it works** | Enables auto-configuration, component scanning from this package down |
+| **Where you use it** | `EmployeeInsuranceManagementApplication` |
+
+```java
+@SpringBootApplication
+public class EmployeeInsuranceManagementApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(EmployeeInsuranceManagementApplication.class, args);
+    }
+}
+```
+
+---
+
+### Web MVC Annotations
+
+---
+
+#### `@RequestMapping`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Maps HTTP requests to controller methods or classes |
+| **How it works** | DispatcherServlet uses HandlerMapping to match URLs to this annotation |
+| **Where you use it** | `@RequestMapping("/hr")`, `@RequestMapping("/admin")`, `@RequestMapping("/employee")` |
+
+```java
+@Controller
+@RequestMapping("/hr")  // All methods in this class handle /hr/*
+public class HrController {
+    // ...
+}
+```
+
+---
+
+#### `@GetMapping`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **Meta-annotated with** | `@RequestMapping(method = RequestMethod.GET)` |
+| **What it does** | Maps HTTP GET requests to a method |
+| **How it works** | Shortcut for `@RequestMapping(method = GET)` |
+| **Where you use it** | Most view-returning controller methods |
+
+```java
+@GetMapping("/employees")
+public String employees(Model model) {
+    // Handles GET /hr/employees
+    return "hr/employees";
+}
+```
+
+---
+
+#### `@PostMapping`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **Meta-annotated with** | `@RequestMapping(method = RequestMethod.POST)` |
+| **What it does** | Maps HTTP POST requests to a method |
+| **How it works** | Shortcut for `@RequestMapping(method = POST)` |
+| **Where you use it** | Form submissions, data creation |
+
+```java
+@PostMapping("/create-employee")
+public String createEmployee(@Valid @ModelAttribute EmployeeCreateRequest dto) {
+    // Handles POST /hr/create-employee
+    return "redirect:/hr/employees";
+}
+```
+
+---
+
+#### `@PathVariable`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Binds a URL path segment to a method parameter |
+| **How it works** | Spring extracts value from URL and converts to parameter type |
+| **Where you use it** | Dynamic URLs like `/employees/{id}` |
+
+```java
+@PostMapping("/employees/{employeeId}/resign")
+public String resignEmployee(@PathVariable Long employeeId) {
+    // employeeId is extracted from URL: /employees/42/resign → employeeId=42
+}
+```
+
+---
+
+#### `@RequestParam`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Binds a query parameter to a method parameter |
+| **How it works** | Spring extracts value from `?param=value` and converts |
+| **Where you use it** | Filter parameters, pagination |
+
+```java
+@GetMapping("/employees-report")
+public String employeesReport(
+    @RequestParam(defaultValue = "ALL") String status,
+    @RequestParam(defaultValue = "10") int pageSize) {
+    // status from: /employees-report?status=ACTIVE
+}
+```
+
+---
+
+#### `@ModelAttribute`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Binds form data to an object |
+| **How it works** | Spring creates object and sets properties from request parameters |
+| **Where you use it** | Form submissions |
+
+```java
+@PostMapping("/create-employee")
+public String createEmployee(@ModelAttribute EmployeeCreateRequest dto) {
+    // Spring populates dto from form fields:
+    // dto.employeeName = request.getParameter("employeeName")
+    // dto.email = request.getParameter("email")
+    // etc.
+}
+```
+
+---
+
+#### `@ResponseBody`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Write return value directly to HTTP response body (not view resolution) |
+| **How it works** | Uses `HttpMessageConverter` to serialize object to JSON/XML |
+| **Where you use it** | REST API endpoints |
+
+```java
+@GetMapping("/api/employees")
+@ResponseBody
+public List<Employee> getEmployees() {
+    // Returns JSON directly, not a view name
+    return employeeRepository.findAll();
+}
+```
+
+---
+
+#### `@ExceptionHandler`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Defines a method to handle specific exception types |
+| **How it works** | Spring MVC calls this method when the specified exception is thrown |
+| **Where you use it** | `GlobalExceptionHandler` |
+
+```java
+@ExceptionHandler(BusinessException.class)
+public String handleBusinessException(BusinessException ex, ...) {
+    // Called when any controller throws BusinessException
+}
+```
+
+---
+
+### Configuration Annotations
+
+---
+
+#### `@Bean`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Marks a method as a factory for a Spring bean |
+| **How it works** | Spring calls this method and registers the return value as a bean |
+| **Where you use it** | `SecurityConfig` |
+
+```java
+@Bean
+public PasswordEncoder passwordEncoder() {
+    return new BCryptPasswordEncoder();
+    // Spring registers this BCryptPasswordEncoder as a bean
+}
+
+@Bean
+public SecurityFilterChain securityFilterChain(HttpSecurity http) {
+    // Return value becomes the SecurityFilterChain bean
+}
+```
+
+---
+
+#### `@Profile`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Conditionally enables a bean for specific profiles |
+| **How it works** | Bean is only created if `spring.profiles.active` matches |
+| **Where you use it** | `SecurityConfig` (dev vs prod) |
+
+```java
+@Bean
+@Profile("dev")
+public SecurityFilterChain devSecurityFilterChain(HttpSecurity http) {
+    // Only created when spring.profiles.active=dev
+    http.csrf(csrf -> csrf.disable());  // CSRF off in dev
+}
+
+@Bean
+@Profile({"prod", "default"})
+public SecurityFilterChain prodSecurityFilterChain(HttpSecurity http) {
+    // Created in production (CSRF enabled)
+}
+```
+
+---
+
+#### `@EnableWebSecurity`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Enables Spring Security's web security support |
+| **How it works** | Imports security configuration and registers SecurityFilterChain |
+| **Where you use it** | `SecurityConfig` |
+
+```java
+@Configuration
+@EnableWebSecurity  // Activates Spring Security
+public class SecurityConfig { }
+```
+
+---
+
+## Part 2: JPA/Hibernate Annotations
+
+---
+
+#### `@Entity`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Marks a class as a JPA entity (database table) |
+| **How it works** | Hibernate scans for `@Entity` and creates table mappings |
+| **Where you use it** | `User`, `Employee`, `Organization`, `Policy`, `Enrollment`, `Claim`, `Dependent` |
+
+```java
+@Entity
+@Table(name = "users")
+public class User {
+    // Maps to 'users' table in database
+}
+```
+
+---
+
+#### `@Table`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Specifies the table name for an entity |
+| **How it works** | Overrides default table name (class name) |
+| **Where you use it** | When table name differs from class name |
+
+```java
+@Entity
+@Table(name = "users")  // Table name is "users", not "User"
+public class User { }
+```
+
+---
+
+#### `@Id`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Marks a field as the primary key |
+| **How it works** | Hibernate uses this field for entity identity |
+| **Where you use it** | Every entity class |
+
+```java
+@Id
+@GeneratedValue(strategy = GenerationType.IDENTITY)
+private Long userId;  // Primary key
+```
+
+---
+
+#### `@GeneratedValue`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Specifies how primary key values are generated |
+| **How it works** | `IDENTITY` = database auto-increment |
+| **Where you use it** | With `@Id` |
+
+```java
+@Id
+@GeneratedValue(strategy = GenerationType.IDENTITY)
+// Database generates: 1, 2, 3, 4...
+private Long employeeId;
+```
+
+---
+
+#### `@Column`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Customizes column mapping |
+| **How it works** | Specifies column name, constraints, length |
+| **Where you use it** | Fields with custom requirements |
+
+```java
+@Column(nullable = false, unique = true)
+private String email;  // NOT NULL, UNIQUE constraint
+
+@Column(name = "emp_code", length = 20)
+private String employeeCode;  // Column name overridden
+```
+
+---
+
+#### `@Enumerated`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Specifies how enum values are stored |
+| **How it works** | `STRING` = store enum name, `ORDINAL` = store index |
+| **Where you use it** | Enum fields |
+
+```java
+@Enumerated(EnumType.STRING)
+private Role role;  // Stored as "ADMIN", "HR", "EMPLOYEE" (not 0, 1, 2)
+
+@Enumerated(EnumType.STRING)
+private EmployeeStatus status;  // "ACTIVE", "NOTICE", "EXITED"
+```
+
+---
+
+#### `@ManyToOne`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Defines many-to-one relationship |
+| **How it works** | Creates foreign key column in child table |
+| **Where you use it** | Employee → Organization, Enrollment → Employee |
+
+```java
+@ManyToOne(optional = false)
+@JoinColumn(name = "organization_id")
+private Organization organization;
+// Creates: organization_id BIGINT FOREIGN KEY
+```
+
+---
+
+#### `@OneToMany`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Defines one-to-many relationship (inverse of ManyToOne) |
+| **How it works** | No column created; uses `mappedBy` to reference owner |
+| **Where you use it** | Organization → Employees |
+
+```java
+@OneToMany(mappedBy = "organization")
+private List<Employee> employees;
+// No column; refers to Employee.organization field
+```
+
+---
+
+#### `@JoinColumn`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Specifies foreign key column name |
+| **How it works** | Customizes the FK column in relationship |
+| **Where you use it** | With `@ManyToOne`, `@OneToOne` |
+
+```java
+@ManyToOne
+@JoinColumn(name = "policy_id")  // FK column named "policy_id"
+private Policy policy;
+```
+
+---
+
+#### `@Embedded` / `@Embeddable`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Embeds one class's fields into another's table |
+| **How it works** | No separate table; fields are flattened |
+| **Where you use it** | `Employee.address` (EmployeeAddress) |
+
+```java
+@Embeddable  // This class's fields go into parent's table
+public class EmployeeAddress {
+    private String city;
+    private String state;
+}
+
+@Entity
+public class Employee {
+    @Embedded
+    private EmployeeAddress address;
+    // Creates columns: city, state in employee table
+}
+```
+
+---
+
+#### `@Transactional`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Wraps method in a database transaction |
+| **How it works** | Spring creates proxy that begins/commits/rollbacks transaction |
+| **Where you use it** | Service methods that modify data |
+
+```java
+@Service
+@Transactional  // All public methods are transactional
+public class EmployeeServiceImpl {
+    
+    public Employee registerEmployee(...) {
+        // BEGIN TRANSACTION
+        userRepository.save(user);
+        employeeRepository.save(employee);
+        // COMMIT (or ROLLBACK on exception)
+    }
+}
+```
+
+---
+
+#### `@PersistenceContext`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Injects the JPA EntityManager |
+| **How it works** | Spring provides thread-safe EntityManager proxy |
+| **Where you use it** | `ReportServiceImpl` |
+
+```java
+@PersistenceContext
+private EntityManager entityManager;
+// Can now execute JPQL queries directly
+```
+
+---
+
+#### `@Query`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Defines custom JPQL/SQL query for repository method |
+| **How it works** | Spring Data JPA executes this query instead of generating |
+| **Where you use it** | Complex queries in repositories |
+
+```java
+@Query("""
+    SELECT COALESCE(SUM(c.approvedAmount), 0)
+    FROM Claim c
+    WHERE c.enrollment.enrollmentId = :enrollmentId
+      AND c.claimStatus = 'APPROVED'
+""")
+Double sumApprovedClaimsByEnrollmentId(@Param("enrollmentId") Long enrollmentId);
+```
+
+---
+
+#### `@Param`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Names a parameter for use in `@Query` |
+| **How it works** | Binds method parameter to `:name` in query |
+| **Where you use it** | With `@Query` |
+
+```java
+@Query("SELECT e FROM Employee e WHERE e.organization = :org")
+List<Employee> findByOrg(@Param("org") Organization organization);
+//                            ↑ binds to :org in query
+```
+
+---
+
+## Part 3: Lombok Annotations
+
+Lombok annotations are **compile-time** - they generate code during compilation.
+
+---
+
+#### `@Getter`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Generates getter methods for all fields |
+| **How it works** | Lombok annotation processor adds code at compile time |
+| **Where you use it** | All entity and DTO classes |
+
+```java
+@Getter
+public class User {
+    private String email;
+    // Lombok generates: public String getEmail() { return this.email; }
+}
+```
+
+---
+
+#### `@Setter`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Generates setter methods for all fields |
+| **How it works** | Lombok annotation processor adds code at compile time |
+| **Where you use it** | Entity classes, mutable DTOs |
+
+```java
+@Setter
+public class User {
+    private String email;
+    // Lombok generates: public void setEmail(String email) { this.email = email; }
+}
+```
+
+---
+
+#### `@NoArgsConstructor`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Generates no-argument constructor |
+| **How it works** | Required by JPA for entity instantiation |
+| **Where you use it** | All entity classes |
+
+```java
+@NoArgsConstructor
+public class User {
+    // Lombok generates: public User() { }
+}
+```
+
+---
+
+#### `@AllArgsConstructor`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Generates constructor with all fields as parameters |
+| **How it works** | Lombok adds constructor at compile time |
+| **Where you use it** | Entity classes, DTOs |
+
+```java
+@AllArgsConstructor
+public class User {
+    private Long id;
+    private String email;
+    // Lombok generates: public User(Long id, String email) { ... }
+}
+```
+
+---
+
+#### `@RequiredArgsConstructor`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Generates constructor for `final` fields only |
+| **How it works** | Used with Spring's constructor injection |
+| **Where you use it** | Controllers, Services (dependency injection) |
+
+```java
+@Service
+@RequiredArgsConstructor
+public class EmployeeServiceImpl {
+    private final EmployeeRepository employeeRepository;  // final!
+    private final UserRepository userRepository;          // final!
+    
+    // Lombok generates:
+    // public EmployeeServiceImpl(EmployeeRepository er, UserRepository ur) {
+    //     this.employeeRepository = er;
+    //     this.userRepository = ur;
+    // }
+    
+    // Spring uses this constructor for dependency injection!
+}
+```
+
+---
+
+#### `@Builder`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Generates builder pattern for object creation |
+| **How it works** | Creates static inner Builder class |
+| **Where you use it** | `EmployeeCoverageReportDTO` |
+
+```java
+@Getter
+@Builder
+public class EmployeeCoverageReportDTO {
+    private String employeeName;
+    private String email;
+    private int enrollmentCount;
+}
+
+// Usage:
+EmployeeCoverageReportDTO dto = EmployeeCoverageReportDTO.builder()
+    .employeeName("John")
+    .email("john@example.com")
+    .enrollmentCount(2)
+    .build();
+```
+
+---
+
+## Part 4: Validation Annotations
+
+---
+
+#### `@Valid`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Triggers validation on the annotated object |
+| **How it works** | Hibernate Validator checks all constraints on object |
+| **Where you use it** | Controller method parameters |
+
+```java
+@PostMapping("/create-employee")
+public String createEmployee(
+    @Valid @ModelAttribute EmployeeCreateRequest dto,
+    BindingResult bindingResult) {
+    
+    if (bindingResult.hasErrors()) {
+        // Validation failed
+    }
+}
+```
+
+---
+
+#### `@NotBlank`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Validates that string is not null, not empty, not whitespace |
+| **How it works** | Hibernate Validator checks at validation time |
+| **Where you use it** | Required string fields |
+
+```java
+@NotBlank(message = "Employee name is required")
+private String employeeName;
+```
+
+---
+
+#### `@NotNull`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Validates that value is not null |
+| **How it works** | Hibernate Validator checks at validation time |
+| **Where you use it** | Required non-string fields |
+
+```java
+@NotNull(message = "Date of birth is required")
+private LocalDate dateOfBirth;
+```
+
+---
+
+#### `@Email`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Validates email format |
+| **How it works** | Uses regex pattern to validate |
+| **Where you use it** | Email fields |
+
+```java
+@Email(message = "Invalid email format")
+private String email;
+```
+
+---
+
+#### `@Size`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Validates string/collection length |
+| **How it works** | Checks min <= length <= max |
+| **Where you use it** | Strings with length constraints |
+
+```java
+@Size(min = 3, max = 50, message = "Name must be 3-50 characters")
+private String employeeName;
+```
+
+---
+
+#### `@Pattern`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Validates against regex pattern |
+| **How it works** | Uses Java regex matcher |
+| **Where you use it** | Custom format validation |
+
+```java
+@Pattern(regexp = "[6-9][0-9]{9}", message = "Invalid phone number")
+private String phoneNumber;
+```
+
+---
+
+#### `@Constraint` (Creating Custom Validators)
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Links a custom annotation to its validator class |
+| **How it works** | Tells Hibernate Validator which class validates this annotation |
+| **Where you use it** | `@ValidAge` |
+
+```java
+@Documented
+@Constraint(validatedBy = AgeValidator.class)  // Links to validator
+@Target({ ElementType.FIELD })
+@Retention(RetentionPolicy.RUNTIME)
+public @interface ValidAge {
+    int min() default 18;
+    int max() default 70;
+    String message() default "Age must be between {min} and {max}";
+    Class<?>[] groups() default {};
+    Class<? extends Payload>[] payload() default {};
+}
+```
+
+---
+
+## Part 5: Meta-Annotations (For Creating Annotations)
+
+---
+
+#### `@Target`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Specifies where an annotation can be used |
+| **How it works** | Compiler enforces placement |
+| **Options** | `FIELD`, `METHOD`, `TYPE`, `PARAMETER`, etc. |
+
+```java
+@Target({ ElementType.FIELD })  // Can only be placed on fields
+public @interface ValidAge { }
+```
+
+---
+
+#### `@Retention`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Specifies how long annotation info is kept |
+| **How it works** | `SOURCE` = discarded at compile, `CLASS` = in bytecode, `RUNTIME` = available via reflection |
+| **Where you use it** | Custom annotations |
+
+```java
+@Retention(RetentionPolicy.RUNTIME)  // Available at runtime for reflection
+public @interface ValidAge { }
+```
+
+---
+
+#### `@Documented`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Includes annotation in Javadoc |
+| **How it works** | Tells Javadoc generator to show this annotation |
+| **Where you use it** | Public annotations |
+
+---
+
+## Part 6: Other Annotations
+
+---
+
+#### `@Override`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Indicates method overrides superclass/interface method |
+| **How it works** | Compiler verifies override correctness |
+| **Where you use it** | Interface implementations, method overrides |
+
+```java
+@Override
+public UserDetails loadUserByUsername(String email) {
+    // Compiler error if this doesn't actually override anything
+}
+```
+
+---
+
+#### `@DateTimeFormat`
+
+| Property | Value |
+|----------|-------|
+| **Type** | Interface (`@interface`) |
+| **What it does** | Specifies date/time format for binding |
+| **How it works** | Spring converts string to date using this format |
+| **Where you use it** | Date parameters |
+
+```java
+@PostMapping("/employees/{id}/resign")
+public String resignEmployee(
+    @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate resignationDate) {
+    // Parses: "2024-02-04" → LocalDate
+}
+```
+
+---
+
+## Summary: Annotation Categories
+
+### Spring Framework
+
+| Annotation | Purpose |
+|------------|---------|
+| `@Component`, `@Service`, `@Repository`, `@Controller` | Mark classes as Spring beans |
+| `@Configuration`, `@Bean` | Define configuration and bean factories |
+| `@RequestMapping`, `@GetMapping`, `@PostMapping` | Map HTTP requests |
+| `@PathVariable`, `@RequestParam`, `@ModelAttribute` | Bind request data |
+| `@ControllerAdvice`, `@ExceptionHandler` | Global exception handling |
+| `@Transactional` | Database transaction management |
+
+### JPA/Hibernate
+
+| Annotation | Purpose |
+|------------|---------|
+| `@Entity`, `@Table` | Define entity classes |
+| `@Id`, `@GeneratedValue` | Primary key configuration |
+| `@Column`, `@Enumerated` | Column mapping |
+| `@ManyToOne`, `@OneToMany`, `@JoinColumn` | Relationships |
+| `@Embedded`, `@Embeddable` | Embedded objects |
+| `@Query`, `@Param` | Custom queries |
+
+### Lombok
+
+| Annotation | Purpose |
+|------------|---------|
+| `@Getter`, `@Setter` | Generate accessors |
+| `@NoArgsConstructor`, `@AllArgsConstructor`, `@RequiredArgsConstructor` | Generate constructors |
+| `@Builder` | Builder pattern |
+
+### Validation
+
+| Annotation | Purpose |
+|------------|---------|
+| `@Valid` | Trigger validation |
+| `@NotBlank`, `@NotNull`, `@Email`, `@Size`, `@Pattern` | Built-in constraints |
+| `@Constraint` | Custom validator |

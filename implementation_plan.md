@@ -1,0 +1,108 @@
+# Fix Exception Handling for MVC UI
+
+## Problem Summary
+
+The current codebase has:
+1. **GlobalExceptionHandler** - commented out, was designed for REST API (`@RestControllerAdvice` returning `ResponseEntity<ApiError>`)
+2. **ErrorPageController** - handles servlet-level errors (404, 500) by showing `error/error.html`
+3. **BusinessException** - thrown in service layer but not properly caught for MVC UI display
+4. **ApiError** - commented out, not used since this is MVC not REST
+
+**Current Issue**: When `BusinessException` is thrown (e.g., during enrollment validation), controllers catch it with `catch (Exception e)` and add to model as `error` attribute. However, if an exception escapes a controller (which doesn't have try-catch), it goes to `ErrorPageController` which shows a generic error page instead of the specific business error message.
+
+## Proposed Solution
+
+Create a **new MVC-focused GlobalExceptionHandler** using `@ControllerAdvice` (not `@RestControllerAdvice`) that:
+1. Catches `BusinessException` and adds the message to flash attributes, then redirects back to referer
+2. Catches `ResourceNotFoundException` and redirects to error page with a proper message
+3. Has a fallback for generic exceptions
+
+> [!IMPORTANT]
+> - The existing `ErrorPageController` will remain for handling HTTP-level errors (404, 403, 500)
+> - The `GlobalExceptionHandler` will focus on **application exceptions** thrown by services
+> - The **ApiError.java** class will remain commented out since it's not used in MVC
+
+## Proposed Changes
+
+### Exception Package
+
+#### [MODIFY] [GlobalExceptionHandler.java](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/exception/GlobalExceptionHandler.java)
+
+**Change from REST to MVC exception handler:**
+
+```java
+package com.employeeinsurancemanagement.exception;
+
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.web.bind.annotation.ControllerAdvice;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.servlet.mvc.support.RedirectAttributes;
+
+@ControllerAdvice
+public class GlobalExceptionHandler {
+
+    @ExceptionHandler(BusinessException.class)
+    public String handleBusinessException(BusinessException ex, 
+                                          HttpServletRequest request,
+                                          RedirectAttributes redirectAttributes) {
+        redirectAttributes.addFlashAttribute("error", ex.getMessage());
+        
+        String referer = request.getHeader("Referer");
+        if (referer != null && !referer.isEmpty()) {
+            return "redirect:" + referer;
+        }
+        return "redirect:/dashboard";
+    }
+
+    @ExceptionHandler(ResourceNotFoundException.class)
+    public String handleResourceNotFound(ResourceNotFoundException ex,
+                                         RedirectAttributes redirectAttributes) {
+        redirectAttributes.addFlashAttribute("error", ex.getMessage());
+        return "redirect:/dashboard";
+    }
+
+    @ExceptionHandler(Exception.class)
+    public String handleGenericException(Exception ex,
+                                         RedirectAttributes redirectAttributes) {
+        redirectAttributes.addFlashAttribute("error", "An unexpected error occurred. Please try again.");
+        return "redirect:/dashboard";
+    }
+}
+```
+
+---
+
+#### [NO CHANGE] [ApiError.java](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/exception/ApiError.java)
+
+This file stays commented out - it's not used in MVC.
+
+---
+
+### Controller Package
+
+#### [NO CHANGE] [ErrorPageController.java](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/controller/ErrorPageController.java)
+
+This controller remains unchanged. It handles HTTP-level errors (404, 403, 500) via Spring Boot's error handling mechanism.
+
+---
+
+## Separation of Concerns
+
+| Component | Purpose |
+|-----------|---------|
+| **GlobalExceptionHandler** | Catches application exceptions (BusinessException, ResourceNotFoundException) thrown by services and redirects with flash attributes |
+| **ErrorPageController** | Handles HTTP-level errors (404, 403, 500) and renders `error/error.html` |
+| **ApiError** | Not used (commented out) - was for REST API responses |
+
+## Verification Plan
+
+### Automated Tests
+```bash
+cd c:\Users\lucky\.antigravity\employee-insurance-management-master
+mvn compile
+```
+
+### Manual Verification
+1. Try to enroll in a policy with invalid data (e.g., add more than 8 dependents)
+2. The BusinessException message should appear as a red alert on the form page
+3. Access a non-existent URL - should show the generic error page (404)

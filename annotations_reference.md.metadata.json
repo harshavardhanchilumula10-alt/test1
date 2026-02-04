@@ -1,0 +1,5 @@
+{
+  "artifactType": "ARTIFACT_TYPE_WALKTHROUGH",
+  "summary": "Comprehensive documentation of all annotations used in the Employee Insurance Management project. Covers Spring Framework annotations (stereotype, web, data, security, configuration), JPA/Hibernate annotations (entity mapping, relationships), Lombok annotations (code generation), Jakarta Validation annotations, and custom annotations. Each annotation is explained with its type (interface), purpose, how it works internally, and real examples from the codebase.",
+  "updatedAt": "2026-02-04T02:07:19.094341500Z"
+}

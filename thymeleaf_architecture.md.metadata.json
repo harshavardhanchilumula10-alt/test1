@@ -1,0 +1,5 @@
+{
+  "artifactType": "ARTIFACT_TYPE_WALKTHROUGH",
+  "summary": "Comprehensive deep-dive into Thymeleaf template engine integration with Spring MVC. Covers all Thymeleaf attributes (th:text, th:if, th:each, th:object, th:field, th:action, th:href, th:errors, th:classappend), expression syntax ($, *, @, #), utility objects, form binding, validation error display, CSRF integration, and the complete request-response rendering cycle with real examples from the project.",
+  "updatedAt": "2026-02-04T01:58:00.161466600Z"
+}

@@ -1,0 +1,5 @@
+{
+  "artifactType": "ARTIFACT_TYPE_WALKTHROUGH",
+  "summary": "Comprehensive documentation of the Employee Module architecture showing all flows including employee registration by HR, self-service profile updates, lifecycle management (resignation/exit), and how the module integrates with other modules like Enrollment, Claims, and Security.",
+  "updatedAt": "2026-02-04T01:32:19.305275Z"
+}

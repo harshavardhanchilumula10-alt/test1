@@ -1,0 +1,593 @@
+# Security Module Architecture & Spring Internals Deep Dive
+
+## Overview
+
+This document explains:
+1. **Spring MVC Request Lifecycle** - How HTTP requests flow through the system
+2. **Security Filter Chain** - How Spring Security intercepts and validates requests
+3. **Authentication Flow** - Login process
+4. **Authorization Flow** - URI/Role validation
+5. **CSRF Protection** - Cross-Site Request Forgery handling
+6. **Your Application's Security Implementation**
+
+---
+
+## Part 1: Complete HTTP Request Lifecycle
+
+### The Big Picture
+
+```mermaid
+flowchart TD
+    subgraph CLIENT["Client (Browser)"]
+        REQ["HTTP Request<br/>GET /hr/employees"]
+    end
+
+    subgraph TOMCAT["Servlet Container (Tomcat)"]
+        SC["Servlet Container"]
+        FC["Filter Chain<br/>(including Security Filters)"]
+        DS["DispatcherServlet"]
+    end
+
+    subgraph SPRING["Spring MVC"]
+        HM["HandlerMapping"]
+        HA["HandlerAdapter"]
+        CTRL["Controller<br/>(HrController)"]
+        VR["ViewResolver"]
+        VIEW["View<br/>(Thymeleaf)"]
+    end
+
+    subgraph SECURITY["Spring Security"]
+        SFC["SecurityFilterChain"]
+        AUTH["AuthenticationFilter"]
+        AUTHZ["AuthorizationFilter"]
+        CSRF["CsrfFilter"]
+        SESS["SessionManagementFilter"]
+    end
+
+    REQ --> SC
+    SC --> FC
+    FC --> SFC
+    SFC --> AUTH
+    AUTH --> CSRF
+    CSRF --> AUTHZ
+    AUTHZ --> SESS
+    SESS --> DS
+    DS --> HM
+    HM --> HA
+    HA --> CTRL
+    CTRL --> VR
+    VR --> VIEW
+    VIEW --> CLIENT
+```
+
+---
+
+### Step-by-Step Request Flow
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant T as Tomcat
+    participant F as FilterChain
+    participant S as SecurityFilterChain
+    participant D as DispatcherServlet
+    participant H as HandlerMapping
+    participant C as Controller
+    participant V as ViewResolver
+    participant TH as Thymeleaf
+
+    B->>T: HTTP Request: GET /hr/employees
+    
+    Note over T: 1. Tomcat receives request on port 8080
+    
+    T->>F: Pass to FilterChain
+    
+    Note over F: 2. Standard filters (encoding, etc.)
+    
+    F->>S: Pass to SecurityFilterChain
+    
+    Note over S: 3. Security Filter Chain<br/>(15+ filters in order)
+    
+    S->>S: CsrfFilter - validate CSRF token
+    S->>S: UsernamePasswordAuthFilter - check auth
+    S->>S: AuthorizationFilter - check roles
+    
+    alt Not authenticated
+        S-->>B: Redirect to /login
+    else Not authorized
+        S-->>B: 403 Forbidden
+    else Authorized
+        S->>D: Pass to DispatcherServlet
+    end
+    
+    Note over D: 4. DispatcherServlet<br/>(Front Controller Pattern)
+    
+    D->>H: Find handler for /hr/employees
+    
+    Note over H: 5. HandlerMapping<br/>Matches URI to @RequestMapping
+    
+    H-->>D: HrController.employees()
+    
+    D->>C: Invoke handler method
+    
+    Note over C: 6. Controller executes business logic
+    
+    C-->>D: Return "hr/employees" (view name)
+    
+    D->>V: Resolve view name
+    
+    Note over V: 7. ViewResolver<br/>Finds template
+    
+    V-->>D: ThymeleafView
+    
+    D->>TH: Render with model
+    
+    Note over TH: 8. Template rendering
+    
+    TH-->>B: HTML Response
+```
+
+---
+
+## Part 2: DispatcherServlet Deep Dive
+
+### What is DispatcherServlet?
+
+The `DispatcherServlet` is Spring MVC's **Front Controller** - the single entry point for all HTTP requests.
+
+```mermaid
+flowchart TD
+    subgraph DS["DispatcherServlet Internals"]
+        REQ["Incoming Request"]
+        HM["Handler Mapping<br/><small>Find which controller handles this URI</small>"]
+        HA["Handler Adapter<br/><small>Invoke controller method</small>"]
+        EX["Exception Resolver<br/><small>Handle errors</small>"]
+        VR["View Resolver<br/><small>Find view template</small>"]
+        RESP["Response"]
+    end
+
+    REQ --> HM
+    HM --> HA
+    HA --> EX
+    EX --> VR
+    VR --> RESP
+```
+
+### DispatcherServlet Components
+
+| Component | Purpose | Your Implementation |
+|-----------|---------|---------------------|
+| **HandlerMapping** | Maps URL → Controller method | `@RequestMapping`, `@GetMapping`, `@PostMapping` |
+| **HandlerAdapter** | Calls controller, handles params | Processes `@PathVariable`, [Model](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/enrollment/controller/EnrollmentController.java#69-80), `BindingResult` |
+| **ViewResolver** | Resolves view name → template file | `ThymeleafViewResolver` → `templates/*.html` |
+| **ExceptionResolver** | Handles exceptions from controllers | Your [GlobalExceptionHandler](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/exception/GlobalExceptionHandler.java#16-60) |
+
+---
+
+## Part 3: Spring Security Filter Chain
+
+### Filter Chain Order
+
+Spring Security inserts a chain of filters **before** the DispatcherServlet:
+
+```mermaid
+flowchart LR
+    subgraph FILTERS["Security Filter Chain (in order)"]
+        F1["DisableEncodeUrlFilter"]
+        F2["WebAsyncManagerIntegrationFilter"]
+        F3["SecurityContextHolderFilter"]
+        F4["HeaderWriterFilter"]
+        F5["CsrfFilter ⭐"]
+        F6["LogoutFilter"]
+        F7["UsernamePasswordAuthenticationFilter ⭐"]
+        F8["RequestCacheAwareFilter"]
+        F9["SecurityContextHolderAwareRequestFilter"]
+        F10["AnonymousAuthenticationFilter"]
+        F11["SessionManagementFilter ⭐"]
+        F12["ExceptionTranslationFilter"]
+        F13["AuthorizationFilter ⭐"]
+    end
+
+    F1 --> F2 --> F3 --> F4 --> F5 --> F6 --> F7
+    F7 --> F8 --> F9 --> F10 --> F11 --> F12 --> F13
+```
+
+### Key Filters Explained
+
+| Filter | Purpose |
+|--------|---------|
+| **CsrfFilter** | Validates CSRF token on POST/PUT/DELETE |
+| **UsernamePasswordAuthenticationFilter** | Handles form login (`POST /login`) |
+| **SessionManagementFilter** | Manages session creation/validation |
+| **AuthorizationFilter** | Checks if user has required roles |
+
+---
+
+## Part 4: Authentication Flow (Login)
+
+### Your Login Configuration
+
+```java
+// From SecurityConfig.java
+.formLogin(form -> form
+    .loginPage("/login")              // Custom login page
+    .loginProcessingUrl("/login")     // Form submits here
+    .defaultSuccessUrl("/dashboard")  // Redirect after login
+    .failureUrl("/login?error=true")) // Redirect on failure
+```
+
+### Complete Login Flow
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant LF as LoginFilter
+    participant AM as AuthenticationManager
+    participant UDS as CustomUserDetailsService
+    participant DB as Database
+    participant PE as PasswordEncoder
+    participant SC as SecurityContext
+
+    B->>LF: POST /login<br/>email=hr@cognizant.com<br/>password=password
+
+    Note over LF: UsernamePasswordAuthenticationFilter<br/>extracts credentials
+
+    LF->>AM: authenticate(email, password)
+
+    Note over AM: AuthenticationManager<br/>delegates to provider
+
+    AM->>UDS: loadUserByUsername("hr@cognizant.com")
+
+    UDS->>DB: SELECT * FROM users WHERE email = ?
+    DB-->>UDS: User entity
+
+    Note over UDS: Your custom logic:<br/>1. Check user.isActive()<br/>2. Check policy expiry (employees only)
+
+    alt User inactive or policies expired
+        UDS-->>AM: throw RuntimeException
+        AM-->>LF: AuthenticationException
+        LF-->>B: Redirect /login?error=true
+    else User valid
+        UDS-->>AM: UserDetails(email, hashedPassword, roles)
+
+        AM->>PE: matches(rawPassword, hashedPassword)
+        PE-->>AM: true/false
+
+        alt Password matches
+            AM->>SC: Store Authentication
+            SC-->>B: Redirect /dashboard + Set JSESSIONID cookie
+        else Password wrong
+            AM-->>LF: BadCredentialsException
+            LF-->>B: Redirect /login?error=true
+        end
+    end
+```
+
+### Your CustomUserDetailsService Logic
+
+```java
+// Key checks performed during login:
+1. User exists in database
+2. User is active (user.isActive())
+3. For EMPLOYEE role only:
+   - Check if they have active enrollments
+   - If all enrollments expired → block login
+   - If no enrollments → allow (can self-enroll)
+```
+
+---
+
+## Part 5: Authorization Flow (URI Validation)
+
+### Your URL Pattern Configuration
+
+```java
+// From SecurityConfig.java
+.authorizeHttpRequests(auth -> auth
+    // Public endpoints (no auth required)
+    .requestMatchers("/login", "/css/**", "/js/**", "/images/**", "/error")
+    .permitAll()
+    
+    // Role-based access
+    .requestMatchers("/admin/**").hasRole("ADMIN")
+    .requestMatchers("/hr/**").hasRole("HR")
+    .requestMatchers("/employee/**").hasAnyRole("EMPLOYEE", "HR", "ADMIN")
+    .requestMatchers("/reports/**").hasAnyRole("HR", "ADMIN")
+    
+    // All other requests require authentication
+    .anyRequest().authenticated())
+```
+
+### Authorization Check Flow
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant AF as AuthorizationFilter
+    participant ADM as AuthorizationDecisionManager
+    participant SC as SecurityContext
+
+    B->>AF: GET /hr/employees
+    
+    AF->>SC: Get current Authentication
+    SC-->>AF: Authentication (email, roles: [ROLE_HR])
+    
+    AF->>ADM: check("/hr/employees", ROLE_HR)
+    
+    Note over ADM: Pattern matching:<br/>"/hr/**" requires hasRole("HR")
+    
+    ADM->>ADM: Does user have ROLE_HR?
+    
+    alt Has required role
+        ADM-->>AF: GRANTED
+        AF-->>B: Continue to DispatcherServlet
+    else Missing role
+        ADM-->>AF: DENIED
+        AF-->>B: 403 Forbidden or redirect to /error/403
+    end
+```
+
+### URL Matching Rules (Order Matters!)
+
+```mermaid
+flowchart TD
+    REQ["/hr/employees"] --> M1{"/login, /css/**, etc.?"}
+    M1 -->|No| M2{"/admin/**?"}
+    M2 -->|No| M3{"/hr/**?"}
+    M3 -->|Yes| CHECK["Check: hasRole('HR')"]
+    CHECK --> AUTH{"User has ROLE_HR?"}
+    AUTH -->|Yes| ALLOW["✅ Allow"]
+    AUTH -->|No| DENY["❌ 403 Forbidden"]
+```
+
+---
+
+## Part 6: CSRF Protection Workflow
+
+### What is CSRF?
+
+**Cross-Site Request Forgery** - An attack where a malicious site tricks your browser into making unwanted requests to a trusted site.
+
+### Your CSRF Configuration
+
+```java
+// Development (CSRF disabled)
+@Profile("dev")
+.csrf(csrf -> csrf.disable())
+
+// Production (CSRF enabled)
+@Profile({"prod", "default"})
+.csrf(csrf -> csrf
+    .ignoringRequestMatchers("/api/**"))  // Disabled for REST APIs
+```
+
+### CSRF Token Flow
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant S as Server
+    participant CF as CsrfFilter
+    participant SS as Session Storage
+
+    Note over B,S: Step 1: Initial Page Load (GET)
+
+    B->>S: GET /hr/create-employee
+    S->>SS: Generate CSRF token
+    SS-->>S: Token: abc123xyz
+    S-->>B: HTML Form with hidden<br/>&lt;input name="_csrf" value="abc123xyz"&gt;
+
+    Note over B,S: Step 2: Form Submission (POST)
+
+    B->>CF: POST /hr/create-employee<br/>_csrf=abc123xyz<br/>employeeName=John&...
+
+    CF->>SS: Validate token
+    SS-->>CF: Token matches session
+
+    alt Token valid
+        CF-->>S: Continue processing
+        S-->>B: 302 Redirect /hr/employees
+    else Token missing or invalid
+        CF-->>B: 403 Forbidden<br/>"Invalid CSRF token"
+    end
+```
+
+### CSRF in Thymeleaf
+
+Thymeleaf automatically includes CSRF tokens when you use `th:action`:
+
+```html
+<!-- This automatically adds the CSRF token -->
+<form th:action="@{/hr/create-employee}" method="post">
+    <!-- Thymeleaf injects:
+    <input type="hidden" name="_csrf" value="abc123xyz"/>
+    -->
+    <input type="text" name="employeeName"/>
+    <button type="submit">Create</button>
+</form>
+```
+
+### When CSRF is NOT Needed
+
+| Request Type | CSRF Required? | Why? |
+|--------------|:--------------:|------|
+| GET | ❌ No | Safe, read-only |
+| POST | ✅ Yes | Modifies state |
+| PUT | ✅ Yes | Modifies state |
+| DELETE | ✅ Yes | Modifies state |
+| API calls | ❌ Disabled | Use tokens instead |
+
+---
+
+## Part 7: Session Management
+
+### Your Session Configuration
+
+```java
+// Production only
+.sessionManagement(session -> session
+    .maximumSessions(1)              // Only 1 session per user
+    .maxSessionsPreventsLogin(false)) // New login kicks out old
+```
+
+### Session Flow
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant S as Server
+    participant SM as SessionManager
+    participant SS as Session Store
+
+    B->>S: POST /login (successful)
+    S->>SM: Create session
+    SM->>SS: Store: JSESSIONID → {user, roles, csrf}
+    SM-->>B: Set-Cookie: JSESSIONID=abc123
+
+    Note over B: Browser stores cookie
+
+    B->>S: GET /hr/dashboard<br/>Cookie: JSESSIONID=abc123
+    S->>SS: Lookup session abc123
+    SS-->>S: {user: hr@cognizant.com, roles: [HR]}
+    S-->>B: 200 OK (HR Dashboard)
+
+    Note over B,S: Logout
+
+    B->>S: POST /logout
+    S->>SS: Delete session abc123
+    S-->>B: Set-Cookie: JSESSIONID=; Max-Age=0<br/>Redirect /login?logout=true
+```
+
+---
+
+## Part 8: Your Security Module Implementation
+
+### File Structure
+
+```
+security/
+├── config/
+│   └── SecurityConfig.java        # Filter chain configuration
+├── model/
+│   └── User.java                  # User entity (email, password, role)
+├── repository/
+│   └── UserRepository.java        # JPA repository
+├── service/
+│   └── CustomUserDetailsService.java  # Login logic
+└── util/
+    └── SecurityUtil.java          # Get current user helper
+```
+
+### Component Details
+
+#### [SecurityConfig.java](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/security/config/SecurityConfig.java)
+
+| Feature | Configuration |
+|---------|---------------|
+| **CSRF** | Disabled in dev, enabled in prod (except `/api/**`) |
+| **Login Page** | `/login` (custom Thymeleaf page) |
+| **Success URL** | `/dashboard` (role-based redirect) |
+| **Logout** | Invalidates session, deletes JSESSIONID |
+| **Access Denied** | Redirects to `/error/403` |
+| **Sessions** | Max 1 per user (prod only) |
+
+---
+
+#### [User.java](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/security/model/User.java)
+
+| Field | Purpose |
+|-------|---------|
+| `email` | Username for login (unique) |
+| [password](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/security/config/SecurityConfig.java#85-89) | BCrypt hashed |
+| `role` | `ADMIN`, [HR](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/employee/controller/EmployeeController.java#42-58), or `EMPLOYEE` |
+| `organization` | User belongs to org |
+| `firstLogin` | Force password change |
+| `active` | Disable account |
+
+---
+
+#### [CustomUserDetailsService.java](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/security/service/CustomUserDetailsService.java)
+
+**Custom Login Checks:**
+1. Find user by email
+2. Check `user.isActive()`
+3. For EMPLOYEE role:
+   - Check active enrollments
+   - Block if all policies expired
+4. Return Spring Security [UserDetails](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/security/service/CustomUserDetailsService.java#19-71)
+
+---
+
+#### [SecurityUtil.java](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/security/util/SecurityUtil.java)
+
+```java
+// Used by all controllers to get current user
+public static String getCurrentUserEmail() {
+    return SecurityContextHolder
+        .getContext()
+        .getAuthentication()
+        .getName();
+}
+```
+
+---
+
+## Part 9: Role-Based Access Matrix
+
+```mermaid
+flowchart LR
+    subgraph ROLES["User Roles"]
+        ADMIN["ADMIN"]
+        HR["HR"]
+        EMP["EMPLOYEE"]
+    end
+
+    subgraph URLS["URL Patterns"]
+        U_ADMIN["/admin/**"]
+        U_HR["/hr/**"]
+        U_EMP["/employee/**"]
+        U_RPT["/reports/**"]
+    end
+
+    ADMIN --> U_ADMIN
+    ADMIN --> U_EMP
+    ADMIN --> U_RPT
+    
+    HR --> U_HR
+    HR --> U_EMP
+    HR --> U_RPT
+    
+    EMP --> U_EMP
+```
+
+| URL Pattern | ADMIN | HR | EMPLOYEE |
+|-------------|:-----:|:--:|:--------:|
+| `/admin/**` | ✅ | ❌ | ❌ |
+| `/hr/**` | ❌ | ✅ | ❌ |
+| `/employee/**` | ✅ | ✅ | ✅ |
+| `/reports/**` | ✅ | ✅ | ❌ |
+| `/login` | ✅ | ✅ | ✅ |
+| `/css/**`, `/js/**` | ✅ | ✅ | ✅ |
+
+---
+
+## Summary: Complete Request Lifecycle
+
+```mermaid
+flowchart TD
+    A["1️⃣ Browser sends HTTP Request"] --> B["2️⃣ Tomcat receives request"]
+    B --> C["3️⃣ Filter Chain processes"]
+    C --> D["4️⃣ Security Filter Chain"]
+    D --> E{"5️⃣ CSRF Check<br/>(POST only)"}
+    E -->|Invalid| F["403 Forbidden"]
+    E -->|Valid| G{"6️⃣ Authenticated?"}
+    G -->|No| H["Redirect /login"]
+    G -->|Yes| I{"7️⃣ Authorized?<br/>(Role check)"}
+    I -->|No| J["403 Access Denied"]
+    I -->|Yes| K["8️⃣ DispatcherServlet"]
+    K --> L["9️⃣ HandlerMapping<br/>(Find controller)"]
+    L --> M["🔟 Controller executes"]
+    M --> N["1️⃣1️⃣ ViewResolver"]
+    N --> O["1️⃣2️⃣ Thymeleaf renders HTML"]
+    O --> P["1️⃣3️⃣ Response to Browser"]
+```

@@ -1,0 +1,230 @@
+# Exception Handling Fix - Walkthrough
+
+## Summary
+
+Fixed the global exception handler to properly integrate with the MVC-based UI. Business exceptions now display as error messages on the appropriate pages.
+
+## Changes Made
+
+### [GlobalExceptionHandler.java](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/exception/GlobalExceptionHandler.java)
+
+**Before:** Commented out REST API handler using `@RestControllerAdvice` returning `ResponseEntity<ApiError>`
+
+**After:** Active MVC handler using `@ControllerAdvice` that:
+
+| Exception Type | Behavior |
+|----------------|----------|
+| [BusinessException](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/exception/BusinessException.java#4-10) | Redirects back to referer with error in flash attributes |
+| [ResourceNotFoundException](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/exception/ResourceNotFoundException.java#3-9) | Redirects to `/dashboard` with error message |
+| [Exception](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/exception/BusinessException.java#4-10) (fallback) | Redirects to `/dashboard` with generic error message |
+
+```diff:GlobalExceptionHandler.java
+// package com.employeeinsurancemanagement.exception;
+
+// import org.springframework.http.HttpStatus;
+// import org.springframework.http.ResponseEntity;
+// import org.springframework.web.bind.MethodArgumentNotValidException;
+// import org.springframework.web.bind.annotation.ExceptionHandler;
+// import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+// @RestControllerAdvice
+// public class GlobalExceptionHandler {
+
+// @ExceptionHandler(ResourceNotFoundException.class)
+// public ResponseEntity<ApiError> handleNotFound(ResourceNotFoundException ex)
+// {
+// return ResponseEntity
+// .status(HttpStatus.NOT_FOUND)
+// .body(new ApiError(ex.getMessage()));
+// }
+
+// @ExceptionHandler(MethodArgumentNotValidException.class)
+// public ResponseEntity<ApiError> handleValidation(
+// MethodArgumentNotValidException ex) {
+
+// String msg = ex.getBindingResult()
+// .getFieldErrors()
+// .get(0)
+// .getDefaultMessage();
+
+// return ResponseEntity.badRequest()
+// .body(new ApiError(msg));
+// }
+
+// @ExceptionHandler(BusinessException.class)
+// public ResponseEntity<ApiError> handleBusiness(BusinessException ex) {
+// return ResponseEntity
+// .status(HttpStatus.BAD_REQUEST)
+// .body(new ApiError(ex.getMessage()));
+// }
+
+// @ExceptionHandler(Exception.class)
+// public ResponseEntity<ApiError> handleGeneric(Exception ex) {
+// return ResponseEntity
+// .status(HttpStatus.INTERNAL_SERVER_ERROR)
+// .body(new ApiError("Something went wrong. Contact support"));
+// }
+// }
+===
+package com.employeeinsurancemanagement.exception;
+
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.web.bind.annotation.ControllerAdvice;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.servlet.mvc.support.RedirectAttributes;
+
+/**
+ * Global exception handler for MVC controllers.
+ * Catches application-level exceptions (BusinessException, ResourceNotFoundException)
+ * and redirects with flash attributes for UI display.
+ * 
+ * Note: HTTP-level errors (404, 403, 500) are handled by ErrorPageController.
+ */
+@ControllerAdvice
+public class GlobalExceptionHandler {
+
+    /**
+     * Handles BusinessException - validation/business rule violations.
+     * Redirects back to the referer page with the error message.
+     */
+    @ExceptionHandler(BusinessException.class)
+    public String handleBusinessException(BusinessException ex, 
+                                          HttpServletRequest request,
+                                          RedirectAttributes redirectAttributes) {
+        redirectAttributes.addFlashAttribute("error", ex.getMessage());
+        
+        String referer = request.getHeader("Referer");
+        if (referer != null && !referer.isEmpty()) {
+            return "redirect:" + referer;
+        }
+        return "redirect:/dashboard";
+    }
+
+    /**
+     * Handles ResourceNotFoundException - when a requested resource is not found.
+     * Redirects to dashboard with error message.
+     */
+    @ExceptionHandler(ResourceNotFoundException.class)
+    public String handleResourceNotFound(ResourceNotFoundException ex,
+                                         RedirectAttributes redirectAttributes) {
+        redirectAttributes.addFlashAttribute("error", ex.getMessage());
+        return "redirect:/dashboard";
+    }
+
+    /**
+     * Fallback handler for any other uncaught exceptions.
+     * Shows a generic error message to avoid exposing internal details.
+     */
+    @ExceptionHandler(Exception.class)
+    public String handleGenericException(Exception ex,
+                                         RedirectAttributes redirectAttributes) {
+        // Log the exception for debugging (optional: add proper logging)
+        ex.printStackTrace();
+        redirectAttributes.addFlashAttribute("error", "An unexpected error occurred. Please try again.");
+        return "redirect:/dashboard";
+    }
+}
+
+// =============================================================================
+// COMMENTED OUT: Original REST API version (not used - this is an MVC app)
+// =============================================================================
+// import org.springframework.http.HttpStatus;
+// import org.springframework.http.ResponseEntity;
+// import org.springframework.web.bind.MethodArgumentNotValidException;
+// import org.springframework.web.bind.annotation.ExceptionHandler;
+// import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+// @RestControllerAdvice
+// public class GlobalExceptionHandler {
+
+// @ExceptionHandler(ResourceNotFoundException.class)
+// public ResponseEntity<ApiError> handleNotFound(ResourceNotFoundException ex)
+// {
+// return ResponseEntity
+// .status(HttpStatus.NOT_FOUND)
+// .body(new ApiError(ex.getMessage()));
+// }
+
+// @ExceptionHandler(MethodArgumentNotValidException.class)
+// public ResponseEntity<ApiError> handleValidation(
+// MethodArgumentNotValidException ex) {
+
+// String msg = ex.getBindingResult()
+// .getFieldErrors()
+// .get(0)
+// .getDefaultMessage();
+
+// return ResponseEntity.badRequest()
+// .body(new ApiError(msg));
+// }
+
+// @ExceptionHandler(BusinessException.class)
+// public ResponseEntity<ApiError> handleBusiness(BusinessException ex) {
+// return ResponseEntity
+// .status(HttpStatus.BAD_REQUEST)
+// .body(new ApiError(ex.getMessage()));
+// }
+
+// @ExceptionHandler(Exception.class)
+// public ResponseEntity<ApiError> handleGeneric(Exception ex) {
+// return ResponseEntity
+// .status(HttpStatus.INTERNAL_SERVER_ERROR)
+// .body(new ApiError("Something went wrong. Contact support"));
+// }
+// }
+
+```
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TD
+    A[User Action] --> B[Controller]
+    B --> C[Service Layer]
+    C -->|throws BusinessException| D[GlobalExceptionHandler]
+    D -->|redirects with flash error| E[Original Page]
+    E -->|displays th:if error| F[Error Alert Banner]
+    
+    B -->|HTTP 404/403/500| G[ErrorPageController]
+    G --> H[error/error.html]
+```
+
+---
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| [GlobalExceptionHandler.java](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/exception/GlobalExceptionHandler.java) | Catches application exceptions, redirects with flash attributes |
+| [ErrorPageController.java](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/controller/ErrorPageController.java) | Handles HTTP-level errors (404, 403, 500) |
+| [ApiError.java](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/exception/ApiError.java) | Not used (commented out) - was for REST API |
+| [BusinessException.java](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/exception/BusinessException.java) | Custom exception for business rule violations |
+| [ResourceNotFoundException.java](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/exception/ResourceNotFoundException.java) | Custom exception for missing resources |
+
+---
+
+## How Business Exceptions Work Now
+
+1. Service throws [BusinessException](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/exception/BusinessException.java#4-10) (e.g., "Maximum two policies allowed per employee")
+2. `GlobalExceptionHandler.handleBusinessException()` catches it
+3. Error message is added to flash attributes: `redirectAttributes.addFlashAttribute("error", ex.getMessage())`
+4. User is redirected back to the referer page (or `/dashboard` if no referer)
+5. Thymeleaf template displays the error: `<div th:if="${error}" class="alert alert-danger" th:text="${error}"></div>`
+
+---
+
+## Verification
+
+To verify the changes work:
+
+1. **Restart the application** (if running) to pick up the new handler
+2. **Test a business exception scenario:**
+   - Go to employee enrollment form
+   - Try to add more than 8 dependents
+   - The error "Maximum 8 dependents allowed" should appear as a red alert
+
+3. **Test a 404 error:**
+   - Navigate to a non-existent URL like `/nonexistent`
+   - Should see the generic error page from ErrorPageController

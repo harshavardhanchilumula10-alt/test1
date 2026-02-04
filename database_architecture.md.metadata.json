@@ -1,0 +1,5 @@
+{
+  "artifactType": "ARTIFACT_TYPE_WALKTHROUGH",
+  "summary": "Comprehensive deep-dive into Spring Data JPA, Hibernate ORM, and JDBC database integration. Covers the complete data layer stack from JpaRepository through EntityManager, Hibernate Session, Connection Pool, JDBC Driver to MySQL database. Includes entity mapping, transaction management, query generation, and your project's specific implementation.",
+  "updatedAt": "2026-02-04T01:49:53.653480100Z"
+}

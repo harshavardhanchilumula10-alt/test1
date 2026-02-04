@@ -1,0 +1,5 @@
+{
+  "artifactType": "ARTIFACT_TYPE_IMPLEMENTATION_PLAN",
+  "summary": "Implementation plan for fixing global exception handler integration with MVC UI, enabling business exceptions to show on UI pages, and commenting out unused API-related classes.",
+  "updatedAt": "2026-02-04T01:16:43.687960300Z"
+}

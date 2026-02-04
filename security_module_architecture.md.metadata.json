@@ -1,0 +1,5 @@
+{
+  "artifactType": "ARTIFACT_TYPE_WALKTHROUGH",
+  "summary": "Comprehensive deep-dive into Spring Security internals, covering the complete request lifecycle from HTTP request through Servlet Container, Filter Chain, DispatcherServlet, and Controller. Includes detailed explanation of Security Filter Chain, Authentication flow, Authorization (URI validation), CSRF protection workflow, and session management.",
+  "updatedAt": "2026-02-04T01:40:45.044075300Z"
+}

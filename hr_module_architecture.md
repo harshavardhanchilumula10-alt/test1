@@ -1,0 +1,427 @@
+# HR Module Architecture
+
+## Overview
+
+The HR module is the **largest and most feature-rich** module in the system, providing comprehensive human resources management:
+- **Employee Management** - Create, resign, exit employees
+- **Enrollment Monitoring** - View all enrollments in organization
+- **Claims Monitoring** - View claims (read-only, no approval rights)
+- **Policy Management** - View available policies and enrollment counts
+- **Reports** - Standard reports + advanced employee coverage reports
+- **Exports** - Excel/PDF export of employee coverage data
+
+---
+
+## Architecture Diagram
+
+```mermaid
+flowchart TD
+    subgraph UI["UI Layer (8 Templates)"]
+        HR_DASH["hr/dashboard.html"]
+        HR_EMP["hr/employees.html"]
+        HR_CREATE["hr/create-employee.html"]
+        HR_ENROLL["hr/enrollments.html"]
+        HR_CLAIMS["hr/claims.html"]
+        HR_POLICY["hr/policies.html"]
+        HR_REPORTS["hr/reports.html"]
+        HR_EMP_RPT["hr/employees-report.html"]
+    end
+
+    subgraph CTRL["Controller Layer"]
+        HR_CTRL["HrController<br/>(461 lines - 16 endpoints)"]
+    end
+
+    subgraph SVC["Service Layer"]
+        EMP_SVC["EmployeeService"]
+        HR_RPT_SVC["HrReportService"]
+        REPORT_SVC["ReportService"]
+    end
+
+    subgraph REPO["Repository Layer"]
+        EMP_REPO["EmployeeRepository"]
+        ENR_REPO["EnrollmentRepository"]
+        CLM_REPO["ClaimRepository"]
+        POL_REPO["PolicyRepository"]
+        USR_REPO["UserRepository"]
+    end
+
+    subgraph EXPORT["Exporters"]
+        EXCEL_EXP["EmployeeCoverageExcelExporter"]
+        PDF_EXP["EmployeeCoveragePdfExporter"]
+    end
+
+    subgraph DTO["DTOs"]
+        CREATE_DTO["EmployeeCreateRequest"]
+        COV_DTO["EmployeeCoverageReportDTO"]
+        FILTER_DTO["EnrollmentStateFilter"]
+    end
+
+    %% UI to Controller
+    HR_DASH --> HR_CTRL
+    HR_EMP --> HR_CTRL
+    HR_CREATE --> HR_CTRL
+    HR_ENROLL --> HR_CTRL
+    HR_CLAIMS --> HR_CTRL
+    HR_POLICY --> HR_CTRL
+    HR_REPORTS --> HR_CTRL
+    HR_EMP_RPT --> HR_CTRL
+
+    %% Controller to Services
+    HR_CTRL --> EMP_SVC
+    HR_CTRL --> HR_RPT_SVC
+    HR_CTRL --> REPORT_SVC
+
+    %% Controller to Repositories
+    HR_CTRL --> EMP_REPO
+    HR_CTRL --> ENR_REPO
+    HR_CTRL --> CLM_REPO
+    HR_CTRL --> POL_REPO
+    HR_CTRL --> USR_REPO
+
+    %% Exports
+    HR_CTRL --> EXCEL_EXP
+    HR_CTRL --> PDF_EXP
+```
+
+---
+
+## Endpoint Overview
+
+| Endpoint | Method | Template | Purpose |
+|----------|--------|----------|---------|
+| `/hr/dashboard` | GET | dashboard.html | HR dashboard with stats |
+| `/hr/employees` | GET | employees.html | List all employees |
+| `/hr/create-employee` | GET | create-employee.html | Create employee form |
+| `/hr/create-employee` | POST | - | Submit new employee |
+| `/hr/employees/{id}/resign` | POST | - | Initiate resignation |
+| `/hr/employees/{id}/exit` | POST | - | Complete exit |
+| `/hr/enrollments` | GET | enrollments.html | View all enrollments |
+| `/hr/claims` | GET | claims.html | View claims (read-only) |
+| `/hr/policies` | GET | policies.html | View policies & enrollment counts |
+| `/hr/reports` | GET | reports.html | Standard reports |
+| `/hr/employees-report` | GET | employees-report.html | Advanced coverage report |
+| `/hr/employees-report/export/excel` | GET | - | Export to Excel |
+| `/hr/employees-report/export/pdf` | GET | - | Export to PDF |
+
+---
+
+## Flow 1: HR Dashboard
+
+```mermaid
+sequenceDiagram
+    participant HR as HR User
+    participant T as hr/dashboard.html
+    participant C as HrController
+    participant ER as EmployeeRepository
+    participant ENR as EnrollmentRepository
+    participant CR as ClaimRepository
+
+    HR->>T: Navigate to /hr/dashboard
+    T->>C: GET /hr/dashboard
+    
+    C->>ER: findAll()
+    Note over C: Filter by organization
+    Note over C: Count by status:<br/>ACTIVE, NOTICE, EXITED
+    
+    C->>CR: findAll()
+    Note over C: Filter pending claims by org
+    
+    C->>ENR: findAll()
+    Note over C: Count org enrollments
+    
+    C-->>T: Model with stats
+    T-->>HR: Dashboard with cards
+```
+
+**Dashboard Stats:**
+- Total Employees, Active, Notice, Exited counts
+- Total Enrollments
+- Pending Claims count
+- Recent 5 employees
+- Admin contact info
+
+---
+
+## Flow 2: Create Employee
+
+```mermaid
+sequenceDiagram
+    participant HR as HR User
+    participant T as hr/create-employee.html
+    participant C as HrController
+    participant S as EmployeeService
+    participant DB as Database
+
+    HR->>T: GET /hr/create-employee
+    C-->>T: Empty form + EmployeeCreateRequest
+
+    HR->>T: Fill form, submit
+    T->>C: POST /hr/create-employee<br/>(EmployeeCreateRequest)
+    
+    alt Validation errors
+        C-->>T: Form with errors highlighted
+    else Valid data
+        C->>S: registerEmployee(dto, orgId)
+        
+        Note over S: Business validations:<br/>1. Domain match<br/>2. Email unique<br/>3. Phone unique<br/>4. Age 18-70<br/>5. Joining date valid
+        
+        alt Business exception
+            S-->>C: throws BusinessException
+            C-->>T: Form with error message
+        else Success
+            S->>DB: Insert User + Employee
+            S-->>C: Employee created
+            C-->>T: redirect:/hr/employees + success
+        end
+    end
+```
+
+---
+
+## Flow 3: Resign Employee
+
+```mermaid
+sequenceDiagram
+    participant HR as HR User
+    participant T as hr/employees.html
+    participant C as HrController
+    participant S as EmployeeService
+    participant DB as Database
+
+    HR->>T: Click "Resign" for employee
+    T->>C: POST /hr/employees/{id}/resign<br/>+ resignationDate
+    
+    C->>S: resignEmployee(id, date)
+    
+    Note over S: Validations:<br/>1. Only HR can resign<br/>2. Employee must be ACTIVE
+    
+    alt Valid
+        Note over S: status = NOTICE<br/>noticePeriodEndDate = date + 30 days
+        S->>DB: UPDATE employee
+        S-->>C: void
+        C-->>T: redirect + success flash
+    else Invalid
+        S-->>C: throws BusinessException
+        C-->>T: redirect + error flash
+    end
+```
+
+---
+
+## Flow 4: Exit Employee
+
+```mermaid
+sequenceDiagram
+    participant HR as HR User
+    participant T as hr/employees.html
+    participant C as HrController
+    participant S as EmployeeService
+    participant DB as Database
+
+    HR->>T: Click "Exit" for employee
+    T->>C: POST /hr/employees/{id}/exit
+    
+    C->>S: exitEmployee(id)
+    
+    Note over S: Validations:<br/>1. Only HR can exit<br/>2. Must be in NOTICE<br/>3. 30-day notice completed
+    
+    alt Valid
+        Note over S: status = EXITED
+        S->>DB: UPDATE employee
+        S-->>C: void
+        C-->>T: redirect + success flash
+    else Invalid
+        S-->>C: throws BusinessException
+        C-->>T: redirect + error flash
+    end
+```
+
+---
+
+## Flow 5: Advanced Employee Coverage Report
+
+```mermaid
+sequenceDiagram
+    participant HR as HR User
+    participant T as hr/employees-report.html
+    participant C as HrController
+    participant S as HrReportService
+    participant DB as Database
+
+    HR->>T: Navigate to /hr/employees-report
+    HR->>T: Apply filters:<br/>status, category, enrollmentState
+    T->>C: GET /hr/employees-report<br/>?status=ACTIVE&category=SENIOR&...
+    
+    C->>S: getEmployeeCoverageReport(<br/>orgId, status, category,<br/>enrollmentFilter, sortBy, sortDir,<br/>page, pageSize)
+    
+    S->>DB: Query employees + enrollments + claims
+    Note over S: Apply filters, sorting, pagination
+    
+    S-->>C: EmployeeCoverageReportResult<br/>(content, pagination metadata)
+    
+    C-->>T: Model with employees + pagination
+    T-->>HR: Table with pagination controls
+```
+
+**Supported Filters:**
+- Status: `ALL`, `ACTIVE`, `NOTICE`, `EXITED`
+- Category: `ALL`, `JUNIOR`, `SENIOR`
+- Enrollment State: `ALL`, `ENROLLED`, `NOT_ENROLLED`
+- Sort By: `name`, `status`, `category`, `code`
+- Sort Direction: `asc`, `desc`
+- Page Size: `10`, `25`, `50`
+
+---
+
+## Flow 6: Export to Excel/PDF
+
+```mermaid
+sequenceDiagram
+    participant HR as HR User
+    participant T as hr/employees-report.html
+    participant C as HrController
+    participant S as HrReportService
+    participant E as Exporter
+    participant B as Browser
+
+    HR->>T: Click "Export Excel" or "Export PDF"
+    T->>C: GET /hr/employees-report/export/excel<br/>?status=ACTIVE&category=SENIOR&...
+    
+    C->>S: getEmployeeCoverageReport(<br/>..., page=0, pageSize=10000)
+    Note over S: Get ALL matching records
+    S-->>C: Full result set
+    
+    C->>E: export(employees, filterDescription)
+    E-->>C: byte[] (file content)
+    
+    C->>B: Response with Content-Disposition<br/>attachment; filename=report.xlsx
+    B-->>HR: File download
+```
+
+---
+
+## HR vs Admin Comparison
+
+| Capability | HR | Admin |
+|------------|:--:|:-----:|
+| View Dashboard | ✅ | ✅ |
+| Create Employees | ✅ | ❌ |
+| Resign/Exit Employees | ✅ | ❌ |
+| View Enrollments | ✅ | ❌ |
+| View Claims | ✅ (read-only) | ✅ |
+| **Approve/Reject Claims** | ❌ | ✅ |
+| View Policies | ✅ | ❌ |
+| View Reports | ✅ | ✅ |
+| Export Excel/PDF | ✅ | ❌ |
+
+> [!IMPORTANT]
+> **HR cannot approve/reject claims** - they can only view them.  
+> Claim approval is exclusively an **Admin** function.
+
+---
+
+## Component Details
+
+### HrController Dependencies
+
+| Dependency | Purpose |
+|------------|---------|
+| `EmployeeService` | Create/Resign/Exit employees |
+| `EmployeeRepository` | List employees by org |
+| `EnrollmentRepository` | List enrollments by org |
+| `ClaimRepository` | View claims (read-only) |
+| `PolicyRepository` | Get org policies |
+| `ReportService` | Standard reports |
+| `HrReportService` | Advanced coverage reports |
+| `UserRepository` | Get current HR user |
+
+---
+
+### DTOs
+
+| DTO | Purpose |
+|-----|---------|
+| [EmployeeCreateRequest](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/employee/dto/EmployeeCreateRequest.java) | Create new employee (from Employee module) |
+| [EmployeeCoverageReportDTO](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/hr/dto/EmployeeCoverageReportDTO.java) | Coverage report row data |
+| [EnrollmentStateFilter](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/hr/dto/EnrollmentStateFilter.java) | `ALL`, `ENROLLED`, `NOT_ENROLLED` |
+
+---
+
+### Services
+
+| Service | Purpose |
+|---------|---------|
+| [HrReportService](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/hr/service/HrReportService.java) | Advanced coverage reports with filtering, sorting, pagination |
+
+---
+
+### Exporters
+
+| Exporter | Format | Library |
+|----------|--------|---------|
+| [EmployeeCoverageExcelExporter](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/hr/exporter/EmployeeCoverageExcelExporter.java) | `.xlsx` | Apache POI |
+| [EmployeeCoveragePdfExporter](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/java/com/employeeinsurancemanagement/hr/exporter/EmployeeCoveragePdfExporter.java) | `.pdf` | iText |
+
+---
+
+## File Structure
+
+```
+hr/
+├── HrController.java              # Main controller (461 lines, 16 endpoints)
+├── dto/
+│   ├── EmployeeCoverageReportDTO.java  # Coverage report row
+│   └── EnrollmentStateFilter.java      # Filter enum
+├── exporter/
+│   ├── EmployeeCoverageExcelExporter.java  # Excel export
+│   └── EmployeeCoveragePdfExporter.java    # PDF export
+└── service/
+    └── HrReportService.java       # Advanced report service
+```
+
+---
+
+## UI Templates
+
+| Template | Size | Purpose |
+|----------|------|---------|
+| [dashboard.html](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/resources/templates/hr/dashboard.html) | 8KB | Stats cards + recent employees |
+| [employees.html](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/resources/templates/hr/employees.html) | 9KB | Employee table with actions |
+| [create-employee.html](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/resources/templates/hr/create-employee.html) | 10KB | Create employee form |
+| [enrollments.html](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/resources/templates/hr/enrollments.html) | 6KB | Enrollment list |
+| [claims.html](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/resources/templates/hr/claims.html) | 8KB | Claims table (read-only) |
+| [policies.html](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/resources/templates/hr/policies.html) | 10KB | Policy list with enrollment counts |
+| [reports.html](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/resources/templates/hr/reports.html) | 8KB | Standard reports |
+| [employees-report.html](file:///c:/Users/lucky/.antigravity/employee-insurance-management-master/src/main/resources/templates/hr/employees-report.html) | 16KB | Advanced coverage report |
+
+---
+
+## Integration Map
+
+```mermaid
+flowchart LR
+    HR[HR Module] --> EMP[Employee Module]
+    HR --> ENR[Enrollment Module]
+    HR --> CLM[Claim Module]
+    HR --> POL[Policy Module]
+    HR --> RPT[Report Module]
+    HR --> SEC[Security Module]
+    HR --> ORG[Organization Module]
+    
+    EMP -->|"EmployeeService, EmployeeCreateRequest"| HR
+    ENR -->|"EnrollmentRepository (read)"| HR
+    CLM -->|"ClaimRepository (read)"| HR
+    POL -->|"PolicyRepository (read)"| HR
+    RPT -->|"ReportService"| HR
+```
+
+---
+
+## Security
+
+```java
+// From SecurityConfig.java
+.requestMatchers("/hr/**").hasRole("HR")
+```
+
+Only users with `ROLE_HR` can access `/hr/*` endpoints.

@@ -1,0 +1,5 @@
+{
+  "artifactType": "ARTIFACT_TYPE_WALKTHROUGH",
+  "summary": "Documents the changes made to fix exception handling for MVC, including the new GlobalExceptionHandler implementation and how it integrates with the UI.",
+  "updatedAt": "2026-02-04T01:19:51.151895500Z"
+}

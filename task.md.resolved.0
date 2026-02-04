@@ -1,0 +1,26 @@
+# Exception Handling Improvements
+
+## Goals
+- Enable GlobalExceptionHandler to work properly with UI pages  
+- Clean separation between global exceptions and error controller
+- Ensure BusinessExceptions are properly thrown and handled
+- Comment out unused classes/methods
+
+## Tasks
+
+- [ ] **Planning Phase**
+  - [ ] Analyze current exception handling setup
+  - [ ] Create implementation plan
+  - [ ] Get user approval
+
+- [ ] **Execution Phase**
+  - [ ] Enable GlobalExceptionHandler for MVC (not REST API)
+  - [ ] Add handler for BusinessException that redirects errors to UI
+  - [ ] Add handler for ResourceNotFoundException
+  - [ ] Comment out unused ApiError class (since this is MVC, not REST)
+  - [ ] Update UI templates to show error messages properly
+  - [ ] Keep ErrorPageController for generic servlet errors (404, 500)
+
+- [ ] **Verification Phase**
+  - [ ] Verify application compiles
+  - [ ] Test business exception flows
